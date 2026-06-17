@@ -31,8 +31,8 @@ import { useThemeContext } from '@/context/ThemeContext';
 import { useSound } from '@/hooks/use-sound';
 import { DEFAULT_GAME_GRADIENTS } from '@/lib/gameColors';
 import { createInitialState, createSinglePlayerInitialState, scoreNewPalindromes } from '@/lib/gameEngine';
-import { FIRST_MOVE_TIMEOUT_SECONDS, getMatch, submitScore, subscribeToMatch, updateLiveScore, type Match, type MatchPlayer } from '@/lib/matchmaking';
-import { saveSinglePlayerRun } from '@/lib/singlePlayer';
+import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, subscribeToMatch, updateLiveScore, type Match, type MatchPlayer } from '@/lib/matchmaking';
+import { getMyBestSinglePlayer, saveSinglePlayerRun } from '@/lib/singlePlayer';
 
 const COLOR_BLIND_TOKENS: Record<ColorBlindMode, readonly string[]> = {
   symbols: ['●', '▲', '■', '◆', '★'],
@@ -631,6 +631,7 @@ export default function GameLayout() {
   const [pause, setPause] = useState(false);
   const [settingsVisible, setSettingsVisible] = useState(false);
   const [gameOver, setGameOver] = useState<{ status: 'win' | 'lose'; message: string } | null>(null);
+  const [newHighScore, setNewHighScore] = useState(false);
   const [restartConfirmationVisible, setRestartConfirmationVisible] = useState(false);
   const [homeConfirmationVisible, setHomeConfirmationVisible] = useState(false);
   const [rulesVisible, setRulesVisible] = useState(false);
@@ -918,6 +919,7 @@ export default function GameLayout() {
     setIsTimerRunning(false);
     setPause(false);
     setGameOver(null);
+    setNewHighScore(false);
     setFeedback(null);
     setDragOverCell(null);
     setActiveHint(null);
@@ -950,6 +952,8 @@ export default function GameLayout() {
       const user = await authService.getSessionUser();
       if (!user) return;
       singlePlayerSavedRef.current = true;
+      const previousBest = await getMyBestSinglePlayer(user.id);
+      setNewHighScore(!!previousBest && finalScore > previousBest.best_score);
       await saveSinglePlayerRun(user.id, finalScore, finalTimeSeconds);
     } catch (e) {
       singlePlayerSavedRef.current = false;
@@ -2218,8 +2222,15 @@ export default function GameLayout() {
                   { color: theme === 'dark' ? '#FFFFFF' : '#0F172A' },
                 ]}
               >
-                {gameOver.status === 'win' ? 'You win!' : 'Game over'}
+                Game Over
               </Text>
+
+              {newHighScore && (
+                <View style={styles.newHighScoreBadge}>
+                  <Ionicons name="sparkles" size={14} color="#FFFFFF" />
+                  <Text style={styles.newHighScoreText}>New High-Score</Text>
+                </View>
+              )}
 
               <Text
                 style={[
@@ -2497,7 +2508,12 @@ export default function GameLayout() {
                 </Pressable>
                 <Pressable
                   onPress={async () => {
-                    if (!matchId) await persistSinglePlayerRun();
+                    if (matchId) {
+                      const user = await authService.getSessionUser();
+                      if (user) await forfeitRaceMatch(matchId, user.id);
+                    } else {
+                      await persistSinglePlayerRun();
+                    }
                     setHomeConfirmationVisible(false);
                     router.push('/main');
                   }}
@@ -2718,6 +2734,23 @@ const styles = StyleSheet.create({
     fontFamily: 'Geist-Bold',
     textAlign: 'center',
     letterSpacing: -0.2,
+  },
+  newHighScoreBadge: {
+    marginTop: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 999,
+    backgroundColor: '#f59e0b',
+  },
+  newHighScoreText: {
+    color: '#FFFFFF',
+    fontFamily: 'Geist-Bold',
+    fontWeight: '900',
+    fontSize: 12,
+    textTransform: 'uppercase',
   },
   gameOverMessage: {
     marginTop: 6,

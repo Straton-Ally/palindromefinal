@@ -6,8 +6,8 @@ import { useThemeContext } from "@/context/ThemeContext"
 import { useSound } from "@/hooks/use-sound"
 import { DEFAULT_GAME_GRADIENTS } from "@/lib/gameColors"
 import { checkAllPalindromes, createInitialState, createSinglePlayerInitialState, type ScoringResult } from "@/lib/gameEngine"
-import { FIRST_MOVE_TIMEOUT_SECONDS, getMatch, submitScore, subscribeToMatch, updateLiveScore, type Match, type MatchPlayer } from "@/lib/matchmaking"
-import { saveSinglePlayerRun } from "@/lib/singlePlayer"
+import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, subscribeToMatch, updateLiveScore, type Match, type MatchPlayer } from "@/lib/matchmaking"
+import { getMyBestSinglePlayer, saveSinglePlayerRun } from "@/lib/singlePlayer"
 import { Ionicons } from "@expo/vector-icons"
 import { BlurView } from "expo-blur"
 import { useLocalSearchParams, useRouter } from "expo-router"
@@ -850,6 +850,7 @@ export default function GameLayoutWeb() {
   const [settingsVisible, setSettingsVisible] = useState(false)
   const [pause, setPause] = useState(false)
   const [gameOver, setGameOver] = useState<{ status: "win" | "lose"; message: string } | null>(null)
+  const [newHighScore, setNewHighScore] = useState(false)
   const pendingGameOverRef = useRef<{ status: "win" | "lose"; message: string } | null>(null)
   const [firstMoveActive, setFirstMoveActive] = useState(false)
   const [firstMovePlacements, setFirstMovePlacements] = useState<{ row: number; col: number; colorIndex: number }[]>([])
@@ -1198,6 +1199,8 @@ export default function GameLayoutWeb() {
       const user = await authService.getSessionUser()
       if (!user) return
       singlePlayerSavedRef.current = true
+      const previousBest = await getMyBestSinglePlayer(user.id)
+      setNewHighScore(!!previousBest && finalScore > previousBest.best_score)
       await saveSinglePlayerRun(user.id, finalScore, finalTimeSeconds)
     } catch (e) {
       singlePlayerSavedRef.current = false
@@ -1242,6 +1245,7 @@ export default function GameLayoutWeb() {
     setFirstMovePlacements([])
     setFirstMoveActive(true)
     setGameOver(null)
+    setNewHighScore(false)
     pendingGameOverRef.current = null
     singlePlayerSavedRef.current = false
 
@@ -1990,8 +1994,27 @@ export default function GameLayoutWeb() {
                     textAlign: "center",
                     letterSpacing: -0.2,
                   }}>
-                    {gameOver.status === "win" ? "You win!" : "Game over"}
+                    Game Over
                   </h2>
+
+                  {newHighScore && (
+                    <div style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "7px 12px",
+                      borderRadius: 999,
+                      backgroundColor: "#f59e0b",
+                      color: "#fff",
+                      fontSize: 12,
+                      fontFamily: "Geist-Bold, system-ui",
+                      fontWeight: 900,
+                      textTransform: "uppercase",
+                    }}>
+                      <Ionicons name="sparkles" size={14} color="#FFFFFF" />
+                      <span>New High-Score</span>
+                    </div>
+                  )}
 
                   <p style={{
                     fontSize: 16,
@@ -3366,7 +3389,7 @@ export default function GameLayoutWeb() {
                     marginBottom: 16,
                     textAlign: "center",
                     marginTop: 0,
-                  }}>Return to Main Menu?</h2>
+                  }}>{matchId ? "Leave Game?" : "Return to Main Menu?"}</h2>
                   <p style={{
                     fontSize: 16,
                     color: colors.text,
@@ -3375,7 +3398,7 @@ export default function GameLayoutWeb() {
                     marginBottom: 32,
                     textAlign: "center",
                   }}>
-                    Are you sure you want to leave? Current game progress will be lost.
+                    {matchId ? "Leaving will forfeit the match." : "Are you sure you want to leave? Current game progress will be lost."}
                   </p>
                   
                   <div style={{ display: "flex", flexDirection: "row", gap: 20, width: "100%" }}>
@@ -3402,7 +3425,12 @@ export default function GameLayoutWeb() {
 
                     <Pressable 
                         onPress={async () => {
-                            await persistSinglePlayerRun()
+                            if (matchId) {
+                              const user = await authService.getSessionUser()
+                              if (user) await forfeitRaceMatch(matchId, user.id)
+                            } else {
+                              await persistSinglePlayerRun()
+                            }
                             setHomeConfirmationVisible(false)
                             router.push("/")
                         }}

@@ -351,6 +351,10 @@ export default function TurnGameNative() {
   const scoringInProgressRef = useRef(false);
   const pendingGameOverInfoRef = useRef<GameOverInfo | null>(null);
   const timeoutSubmittingRef = useRef(false);
+  const previousBoardRef = useRef<(number | null)[][] | null>(null);
+  const opponentShimmerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const opponentShimmerProgress = useRef(new Animated.Value(0)).current;
+  const [opponentChangedCells, setOpponentChangedCells] = useState<string[]>([]);
 
   const gridSize = GRID_SIZE;
   const colorGradients = useMemo(
@@ -376,6 +380,40 @@ export default function TurnGameNative() {
       ? turnState.board
       : Array.from({ length: gridSize }, () => Array(gridSize).fill(null));
   const bulldogPositions = useMemo(() => turnState?.bulldog_positions ?? [], [turnState]);
+
+  const showOpponentMoveShimmer = useCallback((cells: string[]) => {
+    if (cells.length === 0) return;
+    if (opponentShimmerTimerRef.current) clearTimeout(opponentShimmerTimerRef.current);
+    setOpponentChangedCells(cells);
+    opponentShimmerProgress.setValue(0);
+    Animated.timing(opponentShimmerProgress, {
+      toValue: 1,
+      duration: 1100,
+      useNativeDriver: true,
+    }).start();
+    opponentShimmerTimerRef.current = setTimeout(() => {
+      setOpponentChangedCells([]);
+      opponentShimmerTimerRef.current = null;
+    }, 1300);
+  }, [opponentShimmerProgress]);
+
+  const captureOpponentBoardChanges = useCallback((nextState: TurnMatchState) => {
+    const previousBoard = previousBoardRef.current;
+    const previousTurn = turnState?.current_turn_user_id;
+    previousBoardRef.current = nextState.board;
+    if (!previousBoard || !userId) return;
+    if (previousTurn === userId || nextState.current_turn_user_id !== userId) return;
+
+    const changed: string[] = [];
+    for (let row = 0; row < gridSize; row++) {
+      for (let col = 0; col < gridSize; col++) {
+        if (previousBoard[row]?.[col] == null && nextState.board[row]?.[col] != null) {
+          changed.push(`${row},${col}`);
+        }
+      }
+    }
+    showOpponentMoveShimmer(changed);
+  }, [gridSize, showOpponentMoveShimmer, turnState?.current_turn_user_id, userId]);
 
   const finishTurnScoring = useCallback(() => {
     if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current);
@@ -479,7 +517,10 @@ export default function TurnGameNative() {
 
       const user = await authService.getSessionUser();
       const latestState = (await getTurnMatchState(matchId)) ?? readyState;
-      if (!cancelled) setTurnState(latestState);
+      if (!cancelled) {
+        previousBoardRef.current = latestState.board;
+        setTurnState(latestState);
+      }
       const opId = latestState.player1_user_id === user?.id ? latestState.player2_user_id : latestState.player1_user_id;
       if (opId && opId !== user?.id) {
         const opProfile = await authService.getProfile(opId);
@@ -497,6 +538,7 @@ export default function TurnGameNative() {
   useEffect(() => {
     if (!matchId) return;
     const unsub = subscribeToTurnState(matchId, (s) => {
+      captureOpponentBoardChanges(s);
       setTurnState(s);
       setLocalTimeP1(s.player1_time_ms);
       setLocalTimeP2(s.player2_time_ms);
@@ -504,7 +546,7 @@ export default function TurnGameNative() {
       lastMoveTime.current = getTurnStartedAtMs(s);
     });
     return unsub;
-  }, [matchId]);
+  }, [captureOpponentBoardChanges, matchId]);
 
   // ── Game-over detection ──
   useEffect(() => {
@@ -561,6 +603,10 @@ export default function TurnGameNative() {
       if (scoredCellsTimerRef.current) {
         clearTimeout(scoredCellsTimerRef.current);
         scoredCellsTimerRef.current = null;
+      }
+      if (opponentShimmerTimerRef.current) {
+        clearTimeout(opponentShimmerTimerRef.current);
+        opponentShimmerTimerRef.current = null;
       }
     };
   }, []);
@@ -666,6 +712,7 @@ export default function TurnGameNative() {
         playSuccessSound();
         triggerHaptic('success');
         const newState = await submitTurnMove(matchId, userId, row, col, colorIndex, scoreDelta, timeSpent);
+        previousBoardRef.current = newState.board;
         setTurnState(newState);
         setLocalTimeP1(newState.player1_time_ms);
         setLocalTimeP2(newState.player2_time_ms);
@@ -735,19 +782,7 @@ export default function TurnGameNative() {
             <Ionicons name="arrow-back" size={24} color={isDark ? '#FFFFFF' : '#0F172A'} />
           </Pressable>
           <Text style={[styles.topBarTitle, { color: '#0060FF' }]}>PALINDROME®</Text>
-          <View
-            style={[
-              styles.turnPill,
-              {
-                backgroundColor: isMyTurn ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
-                borderColor: isMyTurn ? 'rgba(34,197,94,0.4)' : 'rgba(239,68,68,0.4)',
-              },
-            ]}
-          >
-            <Text style={[styles.turnPillText, { color: isMyTurn ? '#22c55e' : '#ef4444' }]}>
-              {isMyTurn ? 'YOUR TURN' : 'WAITING...'}
-            </Text>
-          </View>
+          <View style={styles.topBarBack} />
         </View>
 
         {/* Player Cards */}
@@ -808,8 +843,13 @@ export default function TurnGameNative() {
                     : board[row]?.[col] ?? null;
                   const isHovered = dragOverCell?.row === row && dragOverCell?.col === col;
                   const isScored = scoredCells.includes(`${row},${col}`);
+                  const hasOpponentShimmer = opponentChangedCells.includes(`${row},${col}`);
                   const scoreIndex = isScored ? scoredCells.indexOf(`${row},${col}`) : 0;
                   const scoredScale = isScored ? (scoredCellsRun % 2 === 0 ? 1.14 : 1.1) : 1;
+                  const shimmerTranslateX = opponentShimmerProgress.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [-cellSize, cellSize],
+                  });
 
                   return (
                     <View
@@ -849,6 +889,18 @@ export default function TurnGameNative() {
                               borderRadius: 6,
                               transform: [{ scale: scoredScale }],
                               opacity: isScored && scoreIndex % 2 === 1 ? 0.96 : 1,
+                            },
+                          ]}
+                        />
+                      )}
+                      {hasOpponentShimmer && (
+                        <Animated.View
+                          pointerEvents="none"
+                          style={[
+                            styles.opponentShimmer,
+                            {
+                              width: Math.max(12, cellSize * 0.45),
+                              transform: [{ translateX: shimmerTranslateX }, { rotate: '18deg' }],
                             },
                           ]}
                         />
@@ -1219,6 +1271,13 @@ const styles = StyleSheet.create({
     textShadowRadius: 4,
     textShadowOffset: { width: 0, height: 1 },
     zIndex: 2,
+  },
+  opponentShimmer: {
+    position: 'absolute',
+    top: -10,
+    bottom: -10,
+    backgroundColor: 'rgba(255,255,255,0.72)',
+    zIndex: 1,
   },
 
   feedbackContainer: {

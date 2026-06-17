@@ -190,6 +190,9 @@ export default function TurnGameWeb() {
   const scoringInProgressRef = useRef(false)
   const pendingGameOverInfoRef = useRef<GameOverInfo | null>(null)
   const timeoutSubmittingRef = useRef(false)
+  const previousBoardRef = useRef<(number | null)[][] | null>(null)
+  const opponentShimmerTimerRef = useRef<any>(null)
+  const [opponentChangedCells, setOpponentChangedCells] = useState<string[]>([])
   const [, forceUpdate] = useState(0)
 
   const gridSize = GRID_SIZE
@@ -211,6 +214,34 @@ export default function TurnGameWeb() {
   const board: (number | null)[][] = turnState?.board?.length === gridSize ? turnState.board : Array.from({ length: gridSize }, () => Array(gridSize).fill(null))
   const bulldogPositions = useMemo(() => turnState?.bulldog_positions ?? [], [turnState])
 
+  const showOpponentMoveShimmer = useCallback((cells: string[]) => {
+    if (cells.length === 0) return
+    if (opponentShimmerTimerRef.current) clearTimeout(opponentShimmerTimerRef.current)
+    setOpponentChangedCells(cells)
+    opponentShimmerTimerRef.current = setTimeout(() => {
+      setOpponentChangedCells([])
+      opponentShimmerTimerRef.current = null
+    }, 1300)
+  }, [])
+
+  const captureOpponentBoardChanges = useCallback((nextState: TurnMatchState) => {
+    const previousBoard = previousBoardRef.current
+    const previousTurn = turnState?.current_turn_user_id
+    previousBoardRef.current = nextState.board
+    if (!previousBoard || !userId) return
+    if (previousTurn === userId || nextState.current_turn_user_id !== userId) return
+
+    const changed: string[] = []
+    for (let row = 0; row < gridSize; row++) {
+      for (let col = 0; col < gridSize; col++) {
+        if (previousBoard[row]?.[col] == null && nextState.board[row]?.[col] != null) {
+          changed.push(`${row},${col}`)
+        }
+      }
+    }
+    showOpponentMoveShimmer(changed)
+  }, [gridSize, showOpponentMoveShimmer, turnState?.current_turn_user_id, userId])
+
   const finishTurnScoring = useCallback(() => {
     if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current)
     scoredCellsTimerRef.current = null
@@ -227,6 +258,7 @@ export default function TurnGameWeb() {
   useEffect(() => {
     return () => {
       if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current)
+      if (opponentShimmerTimerRef.current) clearTimeout(opponentShimmerTimerRef.current)
     }
   }, [])
 
@@ -286,7 +318,10 @@ export default function TurnGameWeb() {
       // Load opponent profile
       const user = await authService.getSessionUser()
       const latestState = (await getTurnMatchState(matchId)) ?? readyState
-      if (!cancelled) setTurnState(latestState)
+      if (!cancelled) {
+        previousBoardRef.current = latestState.board
+        setTurnState(latestState)
+      }
       const opId = latestState.player1_user_id === user?.id ? latestState.player2_user_id : latestState.player1_user_id
       if (opId && opId !== user?.id) {
         const opProfile = await authService.getProfile(opId)
@@ -301,6 +336,7 @@ export default function TurnGameWeb() {
   useEffect(() => {
     if (!matchId) return
     const unsub = subscribeToTurnState(matchId, (s) => {
+      captureOpponentBoardChanges(s)
       setTurnState(s)
       setLocalTimeP1(s.player1_time_ms)
       setLocalTimeP2(s.player2_time_ms)
@@ -319,7 +355,7 @@ export default function TurnGameWeb() {
       }
     })
     return unsub
-  }, [matchId, userId, gameOverInfo])
+  }, [captureOpponentBoardChanges, matchId, userId, gameOverInfo])
 
   // ── Chess clock tick ──
   useEffect(() => {
@@ -452,6 +488,7 @@ export default function TurnGameWeb() {
     try {
       playSuccessSound()
       const newState = await submitTurnMove(matchId, userId, row, col, colorIndex, scoreDelta, timeSpent)
+      previousBoardRef.current = newState.board
       setTurnState(newState)
       setLocalTimeP1(newState.player1_time_ms)
       setLocalTimeP2(newState.player2_time_ms)
@@ -577,6 +614,7 @@ export default function TurnGameWeb() {
         @keyframes scoredBlockZoomAlt { 0% { transform: scale(1); filter: brightness(1); } 35% { transform: scale(1.2); filter: brightness(1.22); } 70% { transform: scale(1.1); filter: brightness(1.1); } 100% { transform: scale(1); filter: brightness(1); } }
         @keyframes scoreShimmer { 0% { opacity: 0; transform: translateX(-120%) skewX(-18deg); } 30% { opacity: 0.85; } 100% { opacity: 0; transform: translateX(120%) skewX(-18deg); } }
         @keyframes scoreShimmerAlt { 0% { opacity: 0; transform: translateX(-120%) skewX(-18deg); } 30% { opacity: 0.85; } 100% { opacity: 0; transform: translateX(120%) skewX(-18deg); } }
+        @keyframes opponentMoveShimmer { 0% { opacity: 0; transform: translateX(-120%) skewX(-18deg); } 30% { opacity: 0.85; } 100% { opacity: 0; transform: translateX(120%) skewX(-18deg); } }
       `}</style>
 
       {/* Top Bar */}
@@ -585,10 +623,6 @@ export default function TurnGameWeb() {
           <Ionicons name="arrow-back" size={24} color={colors.text} />
         </Pressable>
         <span style={{ fontSize: "clamp(20px, 2.8vw, 32px)", fontWeight: 900, color: colors.accent, letterSpacing: -1 }}>PALINDROME®</span>
-        {/* Turn indicator */}
-        <div style={{ position: "absolute", right: 8, padding: "6px 14px", borderRadius: 12, background: isMyTurn ? "rgba(34,197,94,0.2)" : "rgba(239,68,68,0.2)", border: isMyTurn ? "1px solid rgba(34,197,94,0.4)" : "1px solid rgba(239,68,68,0.4)", animation: isMyTurn ? "pulse 2s infinite" : "none" }}>
-          <span style={{ fontSize: 13, fontWeight: 800, color: isMyTurn ? "#22c55e" : "#ef4444" }}>{isMyTurn ? "YOUR TURN" : "WAITING..."}</span>
-        </div>
       </div>
 
       {/* Main 3-column Area */}
@@ -646,6 +680,7 @@ export default function TurnGameWeb() {
                       : board[row]?.[col] ?? null
                     const isHovered = dragOverCell?.row === row && dragOverCell?.col === col
                     const isScored = scoredCells.includes(`${row},${col}`)
+                    const hasOpponentShimmer = opponentChangedCells.includes(`${row},${col}`)
                     const scoreIndex = isScored ? scoredCells.indexOf(`${row},${col}`) : 0
                     const scorePulseName = scoredCellsRun % 2 === 0 ? "scorePulse" : "scorePulseAlt"
                     const scoredBlockZoomName = scoredCellsRun % 2 === 0 ? "scoredBlockZoom" : "scoredBlockZoomAlt"
@@ -675,6 +710,15 @@ export default function TurnGameWeb() {
                               position: "absolute", top: "-20%", bottom: "-20%", width: "60%",
                               background: "linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.85), rgba(255,255,255,0))",
                               animation: `${scoreShimmerName} 0.8s ease-out ${scoreIndex * 0.15}s both`,
+                            }} />
+                          </div>
+                        )}
+                        {hasOpponentShimmer && (
+                          <div style={{ position: "absolute", inset: 0, borderRadius: 6, overflow: "hidden", zIndex: 1, pointerEvents: "none" }}>
+                            <div style={{
+                              position: "absolute", top: "-20%", bottom: "-20%", width: "60%",
+                              background: "linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,0.85), rgba(255,255,255,0))",
+                              animation: "opponentMoveShimmer 1.1s ease-out both",
                             }} />
                           </div>
                         )}
@@ -728,7 +772,7 @@ export default function TurnGameWeb() {
                   <span style={{ fontSize: 9, fontWeight: 700, color: "#fff", letterSpacing: 0.5 }}>FORFEIT</span>
                 </div>
               </Pressable>
-              <Pressable onPress={() => router.push("/")} style={{ flex: 1 }}>
+              <Pressable onPress={() => setForfeitConfirm(true)} style={{ flex: 1 }}>
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4, padding: "11px 6px", borderRadius: 14, cursor: "pointer", background: isDark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.06)", border: isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(0,0,0,0.08)" }}
                   onMouseDown={e => e.currentTarget.style.transform = "scale(0.93)"} onMouseUp={e => e.currentTarget.style.transform = "scale(1)"}>
                   <Ionicons name="home" size={20} color={colors.text} />

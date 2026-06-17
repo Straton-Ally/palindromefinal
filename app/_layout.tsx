@@ -9,6 +9,8 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet } from 'react-native';
 import 'react-native-url-polyfill/auto';
 
+const WEB_TITLE = 'PALINDROME | GAMMA GAMES BY OXFORD';
+
 const webFontCss = `
 @font-face {
   font-family: 'Geist-Regular';
@@ -84,6 +86,12 @@ export default function RootLayout() {
           'Geist-Bold': require('../assets/fonts/Geist-Bold.ttf'),
         }
   );
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof document !== 'undefined') {
+      document.title = WEB_TITLE;
+    }
+  }, []);
 
   useEffect(() => {
     if (authLoading) return;

@@ -342,6 +342,48 @@ export async function submitScore(
 }
 
 /**
+ * Forfeit an active race match when a player leaves.
+ */
+export async function forfeitRaceMatch(matchId: string, userId: string): Promise<void> {
+  const supabase = getSupabaseClient();
+  const { error: rpcError } = await supabase.rpc('forfeit_race_match', {
+    p_match_id: matchId,
+    p_user_id: userId,
+  });
+
+  if (!rpcError) return;
+
+  if (rpcError.code && !['42883', 'PGRST202'].includes(rpcError.code)) {
+    throw rpcError;
+  }
+
+  const match = await getMatchWithPlayers(matchId);
+  if (match.mode !== 'race' || match.status === 'finished') return;
+
+  const opponent = (match.match_players ?? []).find((p) => p.user_id !== userId);
+  const now = new Date().toISOString();
+
+  await supabase
+    .from('match_players')
+    .update({ submitted_at: now, is_winner: false })
+    .eq('match_id', matchId)
+    .eq('user_id', userId);
+
+  if (opponent) {
+    await supabase
+      .from('match_players')
+      .update({ is_winner: true })
+      .eq('id', opponent.id);
+  }
+
+  const { error } = await supabase
+    .from('matches')
+    .update({ status: opponent ? 'finished' : 'cancelled', finished_at: now })
+    .eq('id', matchId);
+  if (error) throw error;
+}
+
+/**
  * Mark match as finished (e.g. time expired). Used when both players have submitted.
  */
 export async function finishMatch(matchId: string): Promise<void> {
