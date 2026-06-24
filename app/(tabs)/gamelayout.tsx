@@ -901,7 +901,7 @@ export default function GameLayout() {
   }, []);
 
   const center = Math.floor(gridSize / 2);
-  const word = ' PALINDROME';
+  const word = 'PALINDROME®';
   const halfWord = Math.floor(word.length / 2);
 
   const initializeGame = useCallback(() => {

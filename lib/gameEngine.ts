@@ -11,7 +11,7 @@ const BULLDOG_BONUS = 10;
 
 /** Center row/col for the PALINDROME word cross */
 const CENTER = Math.floor(GRID_SIZE / 2);
-const WORD = ' PALINDROME';
+const WORD = 'PALINDROME®';
 const HALF_WORD = Math.floor(WORD.length / 2);
 
 /** Number of initial pre-placed blocks */

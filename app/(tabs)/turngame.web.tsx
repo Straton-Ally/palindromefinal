@@ -198,7 +198,7 @@ export default function TurnGameWeb() {
   const gridSize = GRID_SIZE
   const colorGradients = useMemo(() => customGameColors ?? [...DEFAULT_GAME_GRADIENTS], [customGameColors])
   const center = Math.floor(gridSize / 2)
-  const word = " PALINDROME"
+  const word = "PALINDROME®"
   const halfWord = Math.floor(word.length / 2)
 
   // Derived state

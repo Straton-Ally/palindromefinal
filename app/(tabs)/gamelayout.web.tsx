@@ -1223,7 +1223,7 @@ export default function GameLayoutWeb() {
   }, [clearScoringFeedbackTimers])
 
   const center = Math.floor(gridSize / 2)
-  const word = " PALINDROME"
+  const word = "PALINDROME®"
   const halfWord = Math.floor(word.length / 2)
 
   const [, forceUpdateLayout] = useState(0)
