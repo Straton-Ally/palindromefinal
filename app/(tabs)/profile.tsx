@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   Dimensions,
   Image,
@@ -44,12 +44,23 @@ export default function ProfileScreen() {
   const [colorsSaved, setColorsSaved] = useState(false);
   const [selectedColorIndex, setSelectedColorIndex] = useState<number | null>(null);
   const [hexInputValue, setHexInputValue] = useState('');
+  const [colorPickerActive, setColorPickerActive] = useState(false);
   useEffect(() => {
     setEditingColors(customGameColors ?? [...DEFAULT_GAME_GRADIENTS]);
   }, [customGameColors]);
-  useEffect(() => {
-    if (selectedColorIndex !== null) setHexInputValue(editingColors[selectedColorIndex][0]);
-  }, [selectedColorIndex, editingColors]);
+
+  const applySelectedColor = useCallback((color: string) => {
+    if (selectedColorIndex === null) return;
+
+    const hex = normalizeHex(color);
+    setHexInputValue(hex);
+    setEditingColors((prev) => {
+      const next = [...prev];
+      next[selectedColorIndex] = gradientFromHex(hex);
+      return next;
+    });
+    setColorsSaved(false);
+  }, [selectedColorIndex]);
 
   const [avatar, setAvatar] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -166,7 +177,11 @@ export default function ProfileScreen() {
       }
       style={{ flex: 1 }}
     >
-      <ScrollView contentContainerStyle={styles.container}>
+      <ScrollView
+        contentContainerStyle={styles.container}
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={!colorPickerActive}
+      >
         {/* Header */}
         <View style={[styles.header, { paddingTop: insets.top }]}>
           <Image
@@ -444,7 +459,14 @@ export default function ProfileScreen() {
                 return (
                   <TouchableOpacity
                     key={index}
-                    onPress={() => setSelectedColorIndex(selected ? null : index)}
+                    onPress={() => {
+                      const nextIndex = selected ? null : index;
+                      setColorPickerActive(false);
+                      setSelectedColorIndex(nextIndex);
+                      if (nextIndex !== null) {
+                        setHexInputValue(editingColors[nextIndex][0]);
+                      }
+                    }}
                     style={[
                       styles.colorBlockTapTarget,
                       selected && { borderColor: '#0060FF', borderWidth: 3 },
@@ -462,24 +484,27 @@ export default function ProfileScreen() {
                   Editing block {selectedColorIndex + 1}
                 </Text>
 
-                <View style={styles.colorWheelWrap}>
+                <View
+                  style={styles.colorWheelWrap}
+                  onTouchStart={() => setColorPickerActive(true)}
+                  onTouchEnd={() => setColorPickerActive(false)}
+                  onTouchCancel={() => setColorPickerActive(false)}
+                >
                   <ColorPicker
-                    color={editingColors[selectedColorIndex][0]}
+                    key={selectedColorIndex}
+                    color={hexInputValue || editingColors[selectedColorIndex][0]}
+                    onInteractionStart={() => setColorPickerActive(true)}
+                    onColorChange={applySelectedColor}
                     onColorChangeComplete={(color: string) => {
-                      const hex = normalizeHex(color);
-                      setHexInputValue(hex);
-                      setEditingColors((prev) => {
-                        const next = [...prev];
-                        next[selectedColorIndex] = gradientFromHex(hex);
-                        return next;
-                      });
-                      setColorsSaved(false);
+                      applySelectedColor(color);
+                      setColorPickerActive(false);
                     }}
                     thumbSize={28}
                     sliderSize={24}
                     noSnap
                     row={false}
                     swatches={false}
+                    useNativeLayout
                   />
                 </View>
 
@@ -536,6 +561,9 @@ export default function ProfileScreen() {
                 style={[styles.resetColorsButton, { borderColor: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.2)' }]}
                 onPress={() => {
                   setEditingColors([...DEFAULT_GAME_GRADIENTS]);
+                  if (selectedColorIndex !== null) {
+                    setHexInputValue(DEFAULT_GAME_GRADIENTS[selectedColorIndex][0]);
+                  }
                   setColorsSaved(false);
                 }}
               >
