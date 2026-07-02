@@ -2,11 +2,14 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
+import { useKeepAwake } from 'expo-keep-awake';
 import { LinearGradient } from 'expo-linear-gradient';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+    ActivityIndicator,
     Animated,
+    BackHandler,
     GestureResponderEvent,
     Image,
     PanResponder,
@@ -31,7 +34,7 @@ import { useThemeContext } from '@/context/ThemeContext';
 import { useSound } from '@/hooks/use-sound';
 import { DEFAULT_GAME_GRADIENTS } from '@/lib/gameColors';
 import { createInitialState, createSinglePlayerInitialState, scoreNewPalindromes } from '@/lib/gameEngine';
-import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, subscribeToMatch, updateLiveScore, type Match, type MatchPlayer } from '@/lib/matchmaking';
+import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, subscribeToMatch, subscribeToRacePresence, updateLiveScore, type Match, type MatchPlayer } from '@/lib/matchmaking';
 import { getMyBestSinglePlayer, saveSinglePlayerRun } from '@/lib/singlePlayer';
 
 const COLOR_BLIND_TOKENS: Record<ColorBlindMode, readonly string[]> = {
@@ -614,6 +617,7 @@ export default function GameLayout() {
   const { matchId: routeMatchId, returnTo: routeReturnTo } = useLocalSearchParams<{ matchId?: string; returnTo?: string }>();
   const matchId = typeof routeMatchId === 'string' ? routeMatchId : undefined;
   const returnTo = typeof routeReturnTo === 'string' ? routeReturnTo : Array.isArray(routeReturnTo) ? routeReturnTo[0] : undefined;
+  useKeepAwake('palindrome-gameplay');
 
   // ✅ Get theme and toggle function from context
   const { theme, toggleTheme, colors } = useThemeContext();
@@ -652,7 +656,37 @@ export default function GameLayout() {
   const [multiplayerFirstMoveAt, setMultiplayerFirstMoveAt] = useState<number | null>(null);
   const [firstMoveCountdown, setFirstMoveCountdown] = useState<number | null>(null);
   const [scoreSubmitted, setScoreSubmitted] = useState(false);
+  const [raceDisconnected, setRaceDisconnected] = useState(false);
   const multiplayerInitDone = useRef(false);
+
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (settingsVisible) {
+        setSettingsVisible(false);
+        return true;
+      }
+      if (rulesVisible) {
+        setRulesVisible(false);
+        return true;
+      }
+      if (guideVisible) {
+        setGuideVisible(false);
+        return true;
+      }
+      if (restartConfirmationVisible) {
+        setRestartConfirmationVisible(false);
+        return true;
+      }
+      if (homeConfirmationVisible) {
+        setHomeConfirmationVisible(false);
+        return true;
+      }
+      setHomeConfirmationVisible(true);
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [guideVisible, homeConfirmationVisible, restartConfirmationVisible, rulesVisible, settingsVisible]);
 
   const scoreBoxRef = useRef<View | null>(null);
   const hintsBoxRef = useRef<View | null>(null);
@@ -855,6 +889,10 @@ export default function GameLayout() {
   const pendingMatchResultRef = useRef<{ matchId: string; returnTo?: string } | null>(null);
   const racePausedMsRef = useRef(0);
   const racePauseStartedAtRef = useRef<number | null>(null);
+  const raceOpponentIdRef = useRef<string | null>(null);
+  const raceOpponentSeenRef = useRef(false);
+  const raceOpponentLeftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const raceOpponentForfeitSubmittingRef = useRef(false);
 
   useEffect(() => {
     gridStateRef.current = gridState;
@@ -992,6 +1030,7 @@ export default function GameLayout() {
       const user = await authService.getSessionUser();
       const other = (m.match_players ?? []).find((p: MatchPlayer) => p.user_id !== user?.id);
       if (other) {
+        raceOpponentIdRef.current = other.user_id;
         setOpponentScore(other.score ?? 0);
         const profile = await authService.getProfile(other.user_id);
         if (profile?.full_name) setOpponentName(profile.full_name);
@@ -1003,29 +1042,87 @@ export default function GameLayout() {
 
   useEffect(() => {
     if (!matchId) return;
-    const unsub = subscribeToMatch(matchId, (m) => {
-      setMultiplayerMatch(m);
-      const me = authService.getSessionUser();
-      void me.then(async (user) => {
-        const other = (m.match_players ?? []).find((p: MatchPlayer) => p.user_id !== user?.id);
-        if (other) {
-          setOpponentScore(other.score ?? 0);
-          const profile = await authService.getProfile(other.user_id);
-          if (profile?.full_name) setOpponentName(profile.full_name);
-          if (profile?.avatar_url) setOpponentAvatar(profile.avatar_url);
-          if (m.status === 'finished') {
-            const nextResult = { matchId: m.id, ...(returnTo ? { returnTo } : {}) };
-            if (scoringInProgressRef.current) {
-              pendingMatchResultRef.current = nextResult;
-            } else {
-              router.replace({ pathname: '/matchresult' as any, params: nextResult });
+    const unsub = subscribeToMatch(
+      matchId,
+      (m) => {
+        setMultiplayerMatch(m);
+        const me = authService.getSessionUser();
+        void me.then(async (user) => {
+          const other = (m.match_players ?? []).find((p: MatchPlayer) => p.user_id !== user?.id);
+          if (other) {
+            raceOpponentIdRef.current = other.user_id;
+            setOpponentScore(other.score ?? 0);
+            const profile = await authService.getProfile(other.user_id);
+            if (profile?.full_name) setOpponentName(profile.full_name);
+            if (profile?.avatar_url) setOpponentAvatar(profile.avatar_url);
+            if (m.status === 'finished') {
+              const nextResult = { matchId: m.id, ...(returnTo ? { returnTo } : {}) };
+              if (scoringInProgressRef.current) {
+                pendingMatchResultRef.current = nextResult;
+              } else {
+                router.replace({ pathname: '/matchresult' as any, params: nextResult });
+              }
             }
           }
+        });
+      },
+      (status) => {
+        const connected = status === 'SUBSCRIBED';
+        setRaceDisconnected(!connected);
+        if (!connected && racePauseStartedAtRef.current == null) {
+          racePauseStartedAtRef.current = Date.now();
         }
-      });
-    });
+        if (connected && racePauseStartedAtRef.current != null) {
+          racePausedMsRef.current += Date.now() - racePauseStartedAtRef.current;
+          racePauseStartedAtRef.current = null;
+        }
+      }
+    );
     return unsub;
   }, [matchId, returnTo]);
+
+  useEffect(() => {
+    if (!matchId) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+
+    void authService.getSessionUser().then((user) => {
+      if (!user || cancelled) return;
+      unsubscribe = subscribeToRacePresence(matchId, user.id, (opponentOnline) => {
+        if (opponentOnline) {
+          raceOpponentSeenRef.current = true;
+          if (raceOpponentLeftTimerRef.current) {
+            clearTimeout(raceOpponentLeftTimerRef.current);
+            raceOpponentLeftTimerRef.current = null;
+          }
+          return;
+        }
+
+        if (!raceOpponentSeenRef.current || raceOpponentLeftTimerRef.current || raceOpponentForfeitSubmittingRef.current) {
+          return;
+        }
+
+        raceOpponentLeftTimerRef.current = setTimeout(() => {
+          raceOpponentLeftTimerRef.current = null;
+          const opponentId = raceOpponentIdRef.current;
+          if (!opponentId || raceOpponentForfeitSubmittingRef.current) return;
+          raceOpponentForfeitSubmittingRef.current = true;
+          void forfeitRaceMatch(matchId, opponentId).finally(() => {
+            raceOpponentForfeitSubmittingRef.current = false;
+          });
+        }, 8000);
+      });
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      if (raceOpponentLeftTimerRef.current) {
+        clearTimeout(raceOpponentLeftTimerRef.current);
+        raceOpponentLeftTimerRef.current = null;
+      }
+    };
+  }, [matchId]);
 
   // Timer useEffect (single player: count up)
   useEffect(() => {
@@ -1254,7 +1351,7 @@ export default function GameLayout() {
     setDragOverCell(null);
     setDraggedColor(null);
 
-    if (gameOver || pause || settingsVisible || scoringInProgressRef.current) {
+    if (gameOver || pause || settingsVisible || scoringInProgressRef.current || (matchId && raceDisconnected)) {
       return false;
     }
 
@@ -1406,7 +1503,7 @@ export default function GameLayout() {
       }
     }
     
-    if (matchId && scoreFound > 0 && !scoreSubmitted) {
+    if (matchId && !scoreSubmitted) {
       authService.getSessionUser().then((user) => {
         if (user) void updateLiveScore(matchId, user.id, newScore);
       });
@@ -2511,6 +2608,9 @@ export default function GameLayout() {
                     if (matchId) {
                       const user = await authService.getSessionUser();
                       if (user) await forfeitRaceMatch(matchId, user.id);
+                      setHomeConfirmationVisible(false);
+                      router.replace({ pathname: '/matchresult' as any, params: { matchId, ...(returnTo ? { returnTo } : {}) } });
+                      return;
                     } else {
                       await persistSinglePlayerRun();
                     }
@@ -2528,6 +2628,19 @@ export default function GameLayout() {
                 </Pressable>
               </View>
             </LinearGradient>
+          </View>
+        </View>
+      )}
+      {matchId && raceDisconnected && (
+        <View style={StyleSheet.absoluteFill} pointerEvents="auto">
+          <View style={styles.reconnectOverlay}>
+            <View style={[styles.reconnectCard, { backgroundColor: theme === 'dark' ? 'rgba(10,10,28,0.96)' : 'rgba(255,255,255,0.96)' }]}>
+              <ActivityIndicator color={colors.accent} />
+              <Text style={[styles.reconnectTitle, { color: theme === 'dark' ? '#FFFFFF' : '#0F172A' }]}>Disconnected</Text>
+              <Text style={[styles.reconnectMessage, { color: theme === 'dark' ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.68)' }]}>
+                Waiting to reconnect. Your game will resume from here.
+              </Text>
+            </View>
           </View>
         </View>
       )}
@@ -2989,16 +3102,16 @@ const styles = StyleSheet.create({
 
   feedbackContainer: {
     position: 'absolute',
-    top: 0,
+    top: 8,
     left: 0,
     right: 0,
-    bottom: 0,
     alignItems: 'center',
-    justifyContent: 'center',
     zIndex: 9999,
+    paddingHorizontal: 24,
   },
   feedbackText: {
-    fontSize: 40,
+    fontFamily: 'Geist-Bold',
+    fontSize: 24,
     fontWeight: '900',
     textAlign: 'center',
     textShadowColor: 'rgba(0,0,0,0.3)',
@@ -3023,6 +3136,35 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 13,
     fontFamily: 'Geist-Regular',
+    textAlign: 'center',
+  },
+  reconnectOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    backgroundColor: 'rgba(0,0,0,0.38)',
+    zIndex: 12000,
+  },
+  reconnectCard: {
+    width: '100%',
+    maxWidth: 340,
+    borderRadius: 20,
+    padding: 22,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.14)',
+  },
+  reconnectTitle: {
+    marginTop: 12,
+    fontFamily: 'Geist-Bold',
+    fontSize: 18,
+  },
+  reconnectMessage: {
+    marginTop: 6,
+    fontFamily: 'Geist-Regular',
+    fontSize: 13,
+    lineHeight: 18,
     textAlign: 'center',
   },
 });

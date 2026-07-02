@@ -912,7 +912,7 @@ export default function GameLayoutWeb() {
         noHintsFaceTimerRef.current = null
       }
     }
-  }, [])
+  }, [matchId])
 
   const uiSteps: GameTutorialStep[] = [
     {
@@ -1048,7 +1048,7 @@ export default function GameLayoutWeb() {
       }, 600)
       return () => clearTimeout(t)
     }
-  }, [])
+  }, [matchId])
 
   useEffect(() => {
     // Fetch user profile data from Supabase
@@ -1635,12 +1635,6 @@ export default function GameLayoutWeb() {
       newScore = scoreRef.current + scoreFound
       scoreRef.current = newScore
 
-      if (matchId && scoreFound > 0 && !scoreSubmitted) {
-        authService.getSessionUser().then((user) => {
-          if (user) void updateLiveScore(matchId, user.id, newScore)
-        })
-      }
-
       if (wrongForcedTriesRef.current !== 0) {
         wrongForcedTriesRef.current = 0
         setWrongForcedTries(0)
@@ -1667,6 +1661,12 @@ export default function GameLayoutWeb() {
       multiplayerFirstMoveAtRef.current = Date.now()
       setMultiplayerFirstMoveAt(Date.now())
       setFirstMoveCountdown(null)
+    }
+
+    if (matchId && !scoreSubmitted) {
+      authService.getSessionUser().then((user) => {
+        if (user) void updateLiveScore(matchId, user.id, newScore)
+      })
     }
 
     if (matchId && nextBlockCounts.every((c) => c === 0) && !scoreSubmitted) {
@@ -3428,6 +3428,9 @@ export default function GameLayoutWeb() {
                             if (matchId) {
                               const user = await authService.getSessionUser()
                               if (user) await forfeitRaceMatch(matchId, user.id)
+                              setHomeConfirmationVisible(false)
+                              router.replace({ pathname: "/matchresult" as any, params: { matchId, ...(returnTo ? { returnTo } : {}) } })
+                              return
                             } else {
                               await persistSinglePlayerRun()
                             }

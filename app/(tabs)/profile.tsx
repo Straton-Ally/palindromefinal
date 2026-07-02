@@ -933,7 +933,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 14,
     paddingVertical: 14,
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
   },
   modeTitle: {
     fontSize: 15,
@@ -943,7 +943,7 @@ const styles = StyleSheet.create({
   },
   modePreviewRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 6,
   },
   modePreviewSwatch: {
     width: 44,

@@ -203,7 +203,8 @@ export async function getMatch(matchId: string): Promise<Match | null> {
  */
 export function subscribeToMatch(
   matchId: string,
-  callback: (match: Match) => void
+  callback: (match: Match) => void,
+  statusCallback?: (status: string) => void
 ): () => void {
   const supabase = getSupabaseClient();
   let channel: RealtimeChannel;
@@ -239,7 +240,10 @@ export function subscribeToMatch(
         void refetch();
       }
     )
-    .subscribe();
+    .subscribe((status) => {
+      statusCallback?.(status);
+      if (status === 'SUBSCRIBED') void refetch();
+    });
 
   return () => {
     supabase.removeChannel(channel);
@@ -339,6 +343,36 @@ export async function submitScore(
       .update({ status: 'finished', finished_at: new Date().toISOString() })
       .eq('id', matchId);
   }
+}
+
+export function subscribeToRacePresence(
+  matchId: string,
+  userId: string,
+  callback: (opponentOnline: boolean) => void
+): () => void {
+  const supabase = getSupabaseClient();
+  const channel = supabase.channel(`race_presence:${matchId}`, {
+    config: { presence: { key: userId } },
+  });
+
+  const sync = () => {
+    const state = channel.presenceState();
+    const opponentOnline = Object.keys(state).some((key) => key !== userId);
+    callback(opponentOnline);
+  };
+
+  channel
+    .on('presence', { event: 'sync' }, sync)
+    .subscribe((status) => {
+      if (status === 'SUBSCRIBED') {
+        void channel.track({ user_id: userId, online_at: new Date().toISOString() });
+        sync();
+      }
+    });
+
+  return () => {
+    supabase.removeChannel(channel);
+  };
 }
 
 /**

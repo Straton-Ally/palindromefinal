@@ -449,7 +449,14 @@ export default function MainScreen() {
                 <BlurView intensity={20} tint={isDark ? 'dark' : 'light'} style={StyleSheet.absoluteFill} />
                 <View style={styles.topbarRow}>
                   <View style={styles.brandWrap}>
-                    <Text style={[styles.brand, { color: isDark ? '#FFFFFF' : '#0060FF' }]}>PALINDROME®</Text>
+                    <Text
+                      style={[styles.brand, { color: isDark ? '#FFFFFF' : '#0060FF' }]}
+                      numberOfLines={1}
+                      adjustsFontSizeToFit
+                      minimumFontScale={0.72}
+                    >
+                      PALINDROME®
+                    </Text>
                     <Text style={[styles.welcome, { color: isDark ? 'rgba(255,255,255,0.78)' : 'rgba(17,17,17,0.62)' }]}>
                       Welcome, {displayName}
                     </Text>
@@ -744,7 +751,8 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   brandWrap: {
-    flexShrink: 1,
+    flex: 1,
+    minWidth: 0,
   },
   brand: {
     fontFamily: 'Geist-Bold',
@@ -759,12 +767,13 @@ const styles = StyleSheet.create({
   actionsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 6,
+    flexShrink: 0,
   },
   iconButton: {
-    width: 42,
-    height: 42,
-    borderRadius: 16,
+    width: 38,
+    height: 38,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,

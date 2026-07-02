@@ -19,12 +19,14 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import * as Haptics from 'expo-haptics';
+import { useKeepAwake } from 'expo-keep-awake';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
+  BackHandler,
   Image,
   PanResponder,
   Pressable,
@@ -77,6 +79,13 @@ function getGameOverReason(info: GameOverInfo, userId: string | null): string {
     return didWin ? 'Board full, you won by score' : 'Board full, you lost by score';
   }
   return didDraw ? 'Draw' : didWin ? 'You won by score' : 'You lost by score';
+}
+
+function getScoringFeedbackForLength(length: number) {
+  if (length >= 9) return { text: 'LEGENDARY!', color: '#F472B6' };
+  if (length === 7) return { text: 'AMAZING!', color: '#A78BFA' };
+  if (length === 5) return { text: 'GREAT!', color: '#60A5FA' };
+  return { text: 'GOOD!', color: '#4ADE80' };
 }
 
 type BoardLayout = { x: number; y: number; width: number; height: number };
@@ -196,7 +205,7 @@ function DraggableBlock({
     latest.current = { boardLayout, count, disabled, measureBoardLayout, onDragUpdate, onDrop, onPickup };
   }, [boardLayout, count, disabled, measureBoardLayout, onDragUpdate, onDrop, onPickup]);
 
-  const cellMargin = 3;
+  const cellMargin = 2;
   const stepXY = cellSize + cellMargin * 2;
   const boardPadding = 10;
 
@@ -252,13 +261,13 @@ function DraggableBlock({
             latest.current.onDrop(cell.row, cell.col, colorIndex);
           }
         }
-        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
         setIsDragging(false);
         lastCellRef.current = null;
         latest.current.onDragUpdate(null);
       },
       onPanResponderTerminate: () => {
-        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: false }).start();
+        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
         setIsDragging(false);
         lastCellRef.current = null;
         latest.current.onDragUpdate(null);
@@ -302,6 +311,7 @@ export default function TurnGameNative() {
   const insets = useSafeAreaInsets();
   const { matchId: routeMatchId } = useLocalSearchParams<{ matchId?: string }>();
   const matchId = typeof routeMatchId === 'string' ? routeMatchId : Array.isArray(routeMatchId) ? routeMatchId[0] : undefined;
+  useKeepAwake('palindrome-turn-gameplay');
 
   const { theme } = useThemeContext();
   const { hapticsEnabled, palindromeAnimationsEnabled, colorBlindEnabled, colorBlindMode, customGameColors } = useSettings();
@@ -336,6 +346,23 @@ export default function TurnGameNative() {
   const [forfeitConfirm, setForfeitConfirm] = useState(false);
   const [gameOverInfo, setGameOverInfo] = useState<GameOverInfo | null>(null);
 
+  useEffect(() => {
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (gameOverInfo) {
+        router.replace('/main');
+        return true;
+      }
+      if (forfeitConfirm) {
+        setForfeitConfirm(false);
+        return true;
+      }
+      setForfeitConfirm(true);
+      return true;
+    });
+
+    return () => subscription.remove();
+  }, [forfeitConfirm, gameOverInfo, router]);
+
   const [localTimeP1, setLocalTimeP1] = useState(TURN_TIME_LIMIT_MS);
   const [localTimeP2, setLocalTimeP2] = useState(TURN_TIME_LIMIT_MS);
   const turnStartedLocal = useRef<number>(Date.now());
@@ -350,11 +377,15 @@ export default function TurnGameNative() {
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const scoringInProgressRef = useRef(false);
   const pendingGameOverInfoRef = useRef<GameOverInfo | null>(null);
+  const deferredTurnStateRef = useRef<TurnMatchState | null>(null);
   const timeoutSubmittingRef = useRef(false);
   const previousBoardRef = useRef<(number | null)[][] | null>(null);
   const opponentShimmerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const opponentShimmerProgress = useRef(new Animated.Value(0)).current;
   const [opponentChangedCells, setOpponentChangedCells] = useState<string[]>([]);
+  const [turnNotice, setTurnNotice] = useState<string | null>(null);
+  const turnNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const previousIsMyTurnRef = useRef<boolean | null>(null);
 
   const gridSize = GRID_SIZE;
   const colorGradients = useMemo(
@@ -397,6 +428,28 @@ export default function TurnGameNative() {
     }, 1300);
   }, [opponentShimmerProgress]);
 
+  const finishTurnScoring = useCallback(() => {
+    if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current);
+    scoredCellsTimerRef.current = null;
+    setScoredCells([]);
+    setFeedback(null);
+    scoringInProgressRef.current = false;
+    setScoringInProgress(false);
+    if (deferredTurnStateRef.current) {
+      const deferred = deferredTurnStateRef.current;
+      deferredTurnStateRef.current = null;
+      setTurnState(deferred);
+      setLocalTimeP1(deferred.player1_time_ms);
+      setLocalTimeP2(deferred.player2_time_ms);
+      turnStartedLocal.current = getTurnStartedAtMs(deferred);
+      lastMoveTime.current = getTurnStartedAtMs(deferred);
+    }
+    if (pendingGameOverInfoRef.current) {
+      setGameOverInfo(pendingGameOverInfoRef.current);
+      pendingGameOverInfoRef.current = null;
+    }
+  }, []);
+
   const captureOpponentBoardChanges = useCallback((nextState: TurnMatchState) => {
     const previousBoard = previousBoardRef.current;
     const previousTurn = turnState?.current_turn_user_id;
@@ -413,31 +466,43 @@ export default function TurnGameNative() {
       }
     }
     showOpponentMoveShimmer(changed);
-  }, [gridSize, showOpponentMoveShimmer, turnState?.current_turn_user_id, userId]);
+    if (changed.length === 0) return;
 
-  const finishTurnScoring = useCallback(() => {
+    const wasPlayer1Opponent = previousTurn === nextState.player1_user_id;
+    const previousOpponentScore = wasPlayer1Opponent ? turnState?.player1_score ?? 0 : turnState?.player2_score ?? 0;
+    const nextOpponentScore = wasPlayer1Opponent ? nextState.player1_score : nextState.player2_score;
+    if (nextOpponentScore <= previousOpponentScore) return;
+
+    const anchors = changed.map((key) => {
+      const [row, col] = key.split(',').map(Number);
+      return { row, col };
+    });
+    const { events } = scoreNewPalindromes(anchors, nextState.board, nextState.bulldog_positions ?? [], 3, previousBoard);
+    const event = events[0];
+    if (!event) return;
+
+    scoringInProgressRef.current = true;
+    setScoringInProgress(true);
+    const feedbackForLength = getScoringFeedbackForLength(event.segmentLength);
+    setFeedback({ text: feedbackForLength.text, color: feedbackForLength.color, id: Date.now() });
+    setScoredCells(event.segment.map((tile) => `${tile.r},${tile.c}`));
+    setScoredCellsRun(Date.now());
     if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current);
-    scoredCellsTimerRef.current = null;
-    setScoredCells([]);
-    setFeedback(null);
-    scoringInProgressRef.current = false;
-    setScoringInProgress(false);
-    if (pendingGameOverInfoRef.current) {
-      setGameOverInfo(pendingGameOverInfoRef.current);
-      pendingGameOverInfoRef.current = null;
-    }
-  }, []);
+    scoredCellsTimerRef.current = setTimeout(() => {
+      finishTurnScoring();
+    }, 1600);
+  }, [finishTurnScoring, gridSize, showOpponentMoveShimmer, turnState?.current_turn_user_id, turnState?.player1_score, turnState?.player2_score, userId]);
 
   // ── Layout ──
   const boardSize = useMemo(() => {
-    const horizontalPad = 16;
-    const verticalReserved = insets.top + insets.bottom + 280; // top bar + player cards + blocks bar + bottom bar
+    const horizontalPad = 12;
+    const verticalReserved = insets.top + insets.bottom + 240;
     const maxByWidth = windowWidth - horizontalPad * 2;
     const maxByHeight = windowHeight - verticalReserved;
-    return Math.max(240, Math.min(maxByWidth, maxByHeight, 480));
+    return Math.max(310, Math.min(maxByWidth, maxByHeight, 390));
   }, [insets.bottom, insets.top, windowHeight, windowWidth]);
-  const cellSize = Math.floor((boardSize - 20) / gridSize) - 6;
-  const blockSize = Math.min(48, Math.floor((windowWidth - 64) / 5) - 8);
+  const cellSize = Math.floor((boardSize - 20) / gridSize) - 4;
+  const blockSize = Math.min(58, Math.floor((windowWidth - 44) / 5) - 6);
 
   // Board layout for drop hit-testing
   const boardRef = useRef<View | null>(null);
@@ -538,6 +603,10 @@ export default function TurnGameNative() {
   useEffect(() => {
     if (!matchId) return;
     const unsub = subscribeToTurnState(matchId, (s) => {
+      if (scoringInProgressRef.current) {
+        deferredTurnStateRef.current = s;
+        return;
+      }
       captureOpponentBoardChanges(s);
       setTurnState(s);
       setLocalTimeP1(s.player1_time_ms);
@@ -547,6 +616,23 @@ export default function TurnGameNative() {
     });
     return unsub;
   }, [captureOpponentBoardChanges, matchId]);
+
+  useEffect(() => {
+    if (!turnState || isGameOver || scoringInProgress || previousIsMyTurnRef.current === null) {
+      previousIsMyTurnRef.current = isMyTurn;
+      return;
+    }
+    const previous = previousIsMyTurnRef.current;
+    previousIsMyTurnRef.current = isMyTurn;
+    if (previous === isMyTurn) return;
+
+    if (turnNoticeTimerRef.current) clearTimeout(turnNoticeTimerRef.current);
+    setTurnNotice(isMyTurn ? 'Your turn' : "Opponent's turn");
+    turnNoticeTimerRef.current = setTimeout(() => {
+      setTurnNotice(null);
+      turnNoticeTimerRef.current = null;
+    }, 1500);
+  }, [isGameOver, isMyTurn, scoringInProgress, turnState]);
 
   // ── Game-over detection ──
   useEffect(() => {
@@ -593,7 +679,7 @@ export default function TurnGameNative() {
         setLocalTimeP2(newTime);
         if (newTime <= 0) expireActiveClock();
       }
-    }, 100);
+    }, 500);
     return () => clearInterval(interval);
   }, [turnState, isGameOver, matchId, scoringInProgress]);
 
@@ -607,6 +693,10 @@ export default function TurnGameNative() {
       if (opponentShimmerTimerRef.current) {
         clearTimeout(opponentShimmerTimerRef.current);
         opponentShimmerTimerRef.current = null;
+      }
+      if (turnNoticeTimerRef.current) {
+        clearTimeout(turnNoticeTimerRef.current);
+        turnNoticeTimerRef.current = null;
       }
     };
   }, []);
@@ -634,10 +724,7 @@ export default function TurnGameNative() {
   );
 
   const getScoringFeedback = useCallback((length: number) => {
-    if (length >= 9) return { text: 'LEGENDARY!', color: '#F472B6' };
-    if (length === 7) return { text: 'AMAZING!', color: '#A78BFA' };
-    if (length === 5) return { text: 'GREAT!', color: '#60A5FA' };
-    return { text: 'GOOD!', color: '#4ADE80' };
+    return getScoringFeedbackForLength(length);
   }, []);
 
   const waitForTurnScoringFrame = useCallback((ms: number) => new Promise<void>((resolve) => {
@@ -689,6 +776,9 @@ export default function TurnGameNative() {
       const timeSpent = Math.max(0, Date.now() - getTurnStartedAtMs(turnState));
       lastMoveTime.current = Date.now();
       setPendingPlacedCell({ row, col, colorIndex });
+      const submittedStateResult = submitTurnMove(matchId, userId, row, col, colorIndex, scoreDelta, timeSpent)
+        .then((state) => ({ state, error: null as unknown }))
+        .catch((error) => ({ state: null as TurnMatchState | null, error }));
 
       if (palindromeAnimationsEnabled) {
         scoringInProgressRef.current = true;
@@ -705,13 +795,16 @@ export default function TurnGameNative() {
           setScoredCellsRun(Date.now() + index);
           await waitForTurnScoringFrame(index === eventsToAnimate.length - 1 ? 2000 : 900);
         }
-        finishTurnScoring();
       }
 
       try {
         playSuccessSound();
         triggerHaptic('success');
-        const newState = await submitTurnMove(matchId, userId, row, col, colorIndex, scoreDelta, timeSpent);
+        const { state: newState, error } = await submittedStateResult;
+        if (error || !newState) throw error ?? new Error('Move submit failed');
+        if (scoreDelta > 0 && !palindromeAnimationsEnabled) {
+          showOpponentMoveShimmer(scoringEvents.flatMap((event) => event.segment.map((tile) => `${tile.r},${tile.c}`)));
+        }
         previousBoardRef.current = newState.board;
         setTurnState(newState);
         setLocalTimeP1(newState.player1_time_ms);
@@ -719,9 +812,11 @@ export default function TurnGameNative() {
         turnStartedLocal.current = getTurnStartedAtMs(newState);
         lastMoveTime.current = getTurnStartedAtMs(newState);
         setPendingPlacedCell(null);
+        finishTurnScoring();
       } catch (err) {
         console.error('Move submit error:', err);
         setPendingPlacedCell(null);
+        finishTurnScoring();
         playErrorSound();
         triggerHaptic('error');
       }
@@ -739,6 +834,7 @@ export default function TurnGameNative() {
       palindromeAnimationsEnabled,
       finishTurnScoring,
       getScoringFeedback,
+      showOpponentMoveShimmer,
       triggerHaptic,
       turnState,
       userId,
@@ -905,6 +1001,19 @@ export default function TurnGameNative() {
                           ]}
                         />
                       )}
+                      {isBulldog && !letter && cellColor !== null && (
+                        <Image
+                          source={require('../../assets/images/bulldog.png')}
+                          style={{
+                            position: 'absolute',
+                            width: Math.max(12, cellSize - 10),
+                            height: Math.max(12, cellSize - 10),
+                            resizeMode: 'contain',
+                            opacity: 0.72,
+                            zIndex: 2,
+                          }}
+                        />
+                      )}
                       {cellColor !== null && colorBlindEnabled && !letter && (
                         <Text style={[styles.cellToken, { fontSize: cellSize > 26 ? 18 : 14 }]}>
                           {COLOR_BLIND_TOKENS[colorBlindMode][cellColor]}
@@ -941,15 +1050,14 @@ export default function TurnGameNative() {
                 <Text style={[styles.feedbackText, { color: feedback.color }]}>{feedback.text}</Text>
               </View>
             )}
-
-            {/* Not-your-turn dim overlay */}
-            {!isMyTurn && !isGameOver && (
-              <View pointerEvents="auto" style={styles.notYourTurnOverlay}>
-                <Text style={styles.notYourTurnText}>Opponent&apos;s turn...</Text>
-              </View>
-            )}
           </View>
         </View>
+
+        {turnNotice && (
+          <View pointerEvents="none" style={styles.turnNotice}>
+            <Text style={styles.turnNoticeText}>{turnNotice}</Text>
+          </View>
+        )}
 
         {/* Blocks bar */}
         <View
@@ -1251,7 +1359,7 @@ const styles = StyleSheet.create({
   },
   boardRow: { flexDirection: 'row' },
   boardCell: {
-    margin: 3,
+    margin: 2,
     borderRadius: 6,
     borderWidth: 1,
     alignItems: 'center',
@@ -1282,16 +1390,15 @@ const styles = StyleSheet.create({
 
   feedbackContainer: {
     position: 'absolute',
-    top: 0,
+    top: 10,
     left: 0,
     right: 0,
-    bottom: 0,
     alignItems: 'center',
-    justifyContent: 'center',
     zIndex: 9999,
+    paddingHorizontal: 24,
   },
   feedbackText: {
-    fontSize: 44,
+    fontSize: 24,
     fontWeight: '900',
     fontFamily: 'Geist-Bold',
     textAlign: 'center',
@@ -1299,23 +1406,23 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 4 },
     textShadowRadius: 14,
   },
-
-  notYourTurnOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.18)',
-    borderRadius: 18,
+  turnNotice: {
+    position: 'absolute',
+    left: 16,
+    right: 16,
+    top: 156,
     alignItems: 'center',
-    justifyContent: 'center',
+    zIndex: 20,
   },
-  notYourTurnText: {
+  turnNoticeText: {
     color: '#FFFFFF',
-    fontSize: 14,
+    fontSize: 13,
     fontFamily: 'Geist-Bold',
     fontWeight: '700',
-    backgroundColor: 'rgba(0,0,0,0.55)',
-    paddingHorizontal: 18,
-    paddingVertical: 8,
-    borderRadius: 10,
+    backgroundColor: 'rgba(0,0,0,0.48)',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 999,
     overflow: 'hidden',
   },
 
