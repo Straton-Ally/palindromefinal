@@ -2229,7 +2229,7 @@ export default function GameLayout() {
                     />
                   </View>
 
-                  <Pressable style={styles.linkRow} onPress={() => router.push('/privacy' as any)}>
+                  <Pressable style={styles.linkRow} onPress={() => router.push('/privacy-policy' as any)}>
                     <Text
                       style={[
                         styles.linkText,
@@ -2241,7 +2241,7 @@ export default function GameLayout() {
                     <Ionicons name="chevron-forward" size={20} color="#0060FF" />
                   </Pressable>
 
-                  <Pressable style={[styles.linkRow, { borderBottomWidth: 0 }]} onPress={() => router.push('/terms' as any)}>
+                  <Pressable style={[styles.linkRow, { borderBottomWidth: 0 }]} onPress={() => router.push('/terms-and-conditions' as any)}>
                     <Text
                       style={[
                         styles.linkText,

@@ -547,7 +547,7 @@ export default function ProfileScreenWeb() {
           <View style={styles.legalLinksContainer}>
             <TouchableOpacity
               style={[styles.legalLink, { borderColor: colors.border }]}
-              onPress={() => router.push('/privacy' as any)}
+              onPress={() => router.push('/privacy-policy' as any)}
             >
               <Ionicons name="shield-outline" size={18} color={colors.primary} />
               <Text style={[styles.legalLinkText, { color: colors.text }]}>Privacy Policy</Text>
@@ -556,7 +556,7 @@ export default function ProfileScreenWeb() {
 
             <TouchableOpacity
               style={[styles.legalLink, { borderColor: colors.border }]}
-              onPress={() => router.push('/terms' as any)}
+              onPress={() => router.push('/terms-and-conditions' as any)}
             >
               <Ionicons name="document-text-outline" size={18} color={colors.primary} />
               <Text style={[styles.legalLinkText, { color: colors.text }]}>Terms & Conditions</Text>

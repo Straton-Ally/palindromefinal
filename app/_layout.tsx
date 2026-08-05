@@ -100,7 +100,7 @@ export default function RootLayout() {
     const routeName = segments[1] ?? 'index';
     const isAuthScreen = inTabsGroup && (routeName === 'index' || routeName === 'signup');
     const isResetPasswordRoute = inTabsGroup && routeName === 'reset-password';
-    const isLegalRoute = segments[0] === 'privacy' || segments[0] === 'terms';
+    const isLegalRoute = segments[0] === 'privacy-policy' || segments[0] === 'terms-and-conditions';
     const isPublicRoute = isAuthScreen || segments[0] === 'auth' || isLegalRoute;
     const isPasswordResetHandoff = isPasswordResetHandoffActive();
 
@@ -112,6 +112,7 @@ export default function RootLayout() {
       user &&
       segments[0] !== '(tabs)' &&
       segments[0] !== 'auth' &&
+      !isLegalRoute &&
       !(isPasswordResetHandoff && isResetPasswordRoute)
     ) {
       router.replace('/(tabs)/main');

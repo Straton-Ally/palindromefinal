@@ -593,7 +593,7 @@ export default function ProfileScreen() {
         >
           <TouchableOpacity
             style={[styles.legalLinkRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)' }]}
-            onPress={() => router.push('/privacy' as any)}
+            onPress={() => router.push('/privacy-policy' as any)}
             activeOpacity={0.85}
           >
             <Ionicons name="shield-outline" size={20} color={isDark ? '#FFFFFF' : '#0060FF'} />
@@ -605,7 +605,7 @@ export default function ProfileScreen() {
 
           <TouchableOpacity
             style={[styles.legalLinkRow, { borderBottomWidth: 0 }]}
-            onPress={() => router.push('/terms' as any)}
+            onPress={() => router.push('/terms-and-conditions' as any)}
             activeOpacity={0.85}
           >
             <Ionicons name="document-text-outline" size={20} color={isDark ? '#FFFFFF' : '#0060FF'} />

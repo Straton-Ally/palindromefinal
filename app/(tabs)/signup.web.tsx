@@ -448,7 +448,7 @@ const handleSignUp = async () => {
                   <span
                     onClick={(e) => {
                       e.preventDefault();
-                      router.push('/terms');
+                      router.push('/terms-and-conditions');
                     }}
                     style={{
                       color: '#FF0000',
@@ -463,7 +463,7 @@ const handleSignUp = async () => {
                   <span
                     onClick={(e) => {
                       e.preventDefault();
-                      router.push('/privacy');
+                      router.push('/privacy-policy');
                     }}
                     style={{
                       color: '#FF0000',

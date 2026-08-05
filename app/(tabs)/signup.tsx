@@ -278,14 +278,14 @@ export default function SignupScreen() {
               {"I've read and agree to the "}
               <Text
                 style={[styles.linkText, { textDecorationLine: 'underline' }]}
-                onPress={() => router.push('/terms' as any)}
+                onPress={() => router.push('/terms-and-conditions' as any)}
               >
                 terms{' '}
               </Text>
               or{' '}
               <Text
                 style={[styles.linkText, { textDecorationLine: 'underline' }]}
-                onPress={() => router.push('/privacy' as any)}
+                onPress={() => router.push('/privacy-policy' as any)}
               >
                 privacy policy
               </Text>
