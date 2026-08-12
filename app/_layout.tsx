@@ -12,6 +12,8 @@ import 'react-native-url-polyfill/auto';
 const WEB_TITLE = 'PALINDROME | GAMMA GAMES BY OXFORD';
 const PLAY_STORE_BADGE = require('../assets/images/play-store.png');
 const APP_STORE_BADGE = require('../assets/images/app-store.png');
+const SPLASH_BACKGROUND = require('../assets/images/bg.png');
+const BULLDOG_LOGO = require('../assets/images/bulldog.png');
 
 const webFontCss = `
 @font-face {
@@ -46,7 +48,6 @@ body::-webkit-scrollbar,
 `;
 
 function MobileStoreOverlay() {
-  const { theme } = useThemeContext();
   const { width } = useWindowDimensions();
   const isTouchDevice =
     Platform.OS === 'web' &&
@@ -56,16 +57,13 @@ function MobileStoreOverlay() {
 
   if (!shouldShow) return null;
 
-  const isDark = theme === 'dark';
-  const textColor = isDark ? '#FFFFFF' : '#0F172A';
-  const mutedColor = isDark ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.72)';
-
   return (
-    <View style={[styles.storeOverlay, { backgroundColor: isDark ? '#050816' : '#F8FBFF' }]}>
+    <View style={styles.storeOverlay}>
+      <Image source={SPLASH_BACKGROUND} style={styles.storeBackground} resizeMode="cover" />
       <View style={styles.storePanel}>
-        <Image source={require('../assets/images/bulldog.png')} style={styles.storeLogo} resizeMode="contain" />
-        <Text style={[styles.storeTitle, { color: textColor }]}>Download Palindrome</Text>
-        <Text style={[styles.storeCopy, { color: mutedColor }]}>
+        <Image source={BULLDOG_LOGO} style={styles.storeLogo} resizeMode="contain" />
+        <Text style={styles.storeTitle}>Download Palindrome</Text>
+        <Text style={styles.storeCopy}>
           Palindrome is best played in the native mobile app.
         </Text>
         <View style={styles.storeBadges}>
@@ -207,9 +205,15 @@ const styles = StyleSheet.create({
   storeOverlay: {
     ...StyleSheet.absoluteFillObject,
     alignItems: 'center',
+    backgroundColor: '#000428',
     justifyContent: 'center',
     paddingHorizontal: 28,
     zIndex: 1000,
+  },
+  storeBackground: {
+    ...StyleSheet.absoluteFillObject,
+    width: '100%',
+    height: '100%',
   },
   storePanel: {
     width: '100%',
@@ -222,12 +226,14 @@ const styles = StyleSheet.create({
     marginBottom: 22,
   },
   storeTitle: {
+    color: '#0060FF',
     fontFamily: 'Geist-Bold',
     fontSize: 30,
     lineHeight: 36,
     textAlign: 'center',
   },
   storeCopy: {
+    color: '#FFFFFF',
     marginTop: 12,
     fontFamily: 'Geist-Regular',
     fontSize: 16,
@@ -241,14 +247,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   storeBadgeButton: {
-    width: '100%',
-    maxWidth: 240,
-    height: 72,
+    width: 252,
+    height: 76,
     alignItems: 'center',
+    backgroundColor: '#000000',
+    borderColor: 'rgba(255,255,255,0.34)',
+    borderRadius: 10,
+    borderWidth: 1,
     justifyContent: 'center',
+    overflow: 'hidden',
   },
   storeBadge: {
-    width: '100%',
-    height: '100%',
+    width: 224,
+    height: 58,
   },
 });
