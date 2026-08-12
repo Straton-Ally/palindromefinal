@@ -24,6 +24,7 @@ export interface AuthResult {
 }
 
 let passwordResetHandoffActive = false;
+const WEB_AUTH_ORIGIN = 'https://palindrome.gammagamesbyoxford.com';
 
 export const isPasswordResetHandoffActive = () => passwordResetHandoffActive;
 export const clearPasswordResetHandoff = () => {
@@ -64,6 +65,11 @@ const parseOAuthRedirectUrl = (url: string) => {
     error_description,
   };
 };
+
+const getWebAuthOrigin = () =>
+  typeof window !== 'undefined' && window.location.origin
+    ? window.location.origin
+    : WEB_AUTH_ORIGIN;
 
 class AuthService {
   constructor() {
@@ -146,11 +152,7 @@ class AuthService {
 
       if (Platform.OS === 'web') {
         // Web: Use Supabase OAuth flow
-        const origin = typeof window !== 'undefined' && window.location.origin 
-          ? window.location.origin 
-          : 'https://gammagamesbyoxford.com';
-        
-        const redirectTo = `${origin}/auth/callback`;
+        const redirectTo = `${getWebAuthOrigin()}/auth/callback`;
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'google',
           options: { redirectTo },
@@ -219,11 +221,7 @@ class AuthService {
       const supabase = getSupabaseClient();
 
       if (Platform.OS === 'web') {
-        const origin = typeof window !== 'undefined' && window.location.origin 
-          ? window.location.origin 
-          : 'https://gammagamesbyoxford.com';
-        
-        const redirectTo = `${origin}/auth/callback`;
+        const redirectTo = `${getWebAuthOrigin()}/auth/callback`;
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider: 'apple',
           options: { 
@@ -297,11 +295,7 @@ class AuthService {
       const supabase = getSupabaseClient();
       const emailRedirectTo =
         Platform.OS === 'web'
-          ? `${
-              typeof window !== 'undefined' && window.location.origin
-                ? window.location.origin
-                : 'https://gammagamesbyoxford.com'
-            }/auth/verified`
+          ? `${getWebAuthOrigin()}/auth/verified`
           : Linking.createURL('auth/verified');
 
       const { data, error } = await supabase.auth.signUp({
@@ -381,11 +375,7 @@ class AuthService {
       const supabase = getSupabaseClient();
       const emailRedirectTo =
         Platform.OS === 'web'
-          ? `${
-              typeof window !== 'undefined' && window.location.origin
-                ? window.location.origin
-                : 'https://gammagamesbyoxford.com'
-            }/reset-password`
+          ? `${getWebAuthOrigin()}/reset-password`
           : Linking.createURL('reset-password');
 
       const { error } = await supabase.auth.signInWithOtp({
