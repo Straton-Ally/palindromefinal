@@ -26,27 +26,27 @@ export default function PrivacyPolicyScreen() {
         <ScrollView contentContainerStyle={styles.content}>
           <Text style={[styles.updated, { color: muted }]}>Last updated August 5, 2026</Text>
 
-          <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>1. Information We Collect</Text>
+          <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>1. Information GammaGames Collects</Text>
           <Text style={[styles.body, { color: muted }]}>
-            When you create an account, we collect your email address, username, and profile information you provide (display name, avatar image). If you sign in with Google or Apple, we receive basic profile information from those services.
+            When you create an account, GammaGames collects your email address, username, and profile information you provide (display name, avatar image). If you sign in with Google or Apple, GammaGames receives basic profile information from those services.
           </Text>
           <Text style={[styles.body, { color: muted }]}>
-            During gameplay, we collect game statistics, match results, scores, friend connections, and in-game preferences. We also collect device information and app diagnostics to maintain service quality.
+            During gameplay, GammaGames collects game statistics, match results, scores, friend connections, and in-game preferences. GammaGames also collects device information and app diagnostics to maintain service quality.
           </Text>
 
-          <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>2. How We Use Your Information</Text>
+          <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>2. How GammaGames Uses Your Information</Text>
           <Text style={[styles.body, { color: muted }]}>
-            We use your information to provide game services including multiplayer matchmaking, leaderboards, friend challenges, notifications, and profile customization. We analyze gameplay data to improve game balance and detect cheating or abuse.
+            GammaGames uses your information to provide game services including multiplayer matchmaking, leaderboards, friend challenges, notifications, and profile customization. GammaGames analyzes gameplay data to improve game balance and detect cheating or abuse.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>3. Data Storage and Security</Text>
           <Text style={[styles.body, { color: muted }]}>
-            Your data is stored securely using Supabase infrastructure. We implement industry-standard security measures to protect your information. Avatar images are stored in cloud storage with public read access so they can be displayed to other players.
+            Your data is stored securely using Supabase infrastructure. GammaGames implements industry-standard security measures to protect your information. Avatar images are stored in cloud storage with public read access so they can be displayed to other players.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>4. Information Sharing</Text>
           <Text style={[styles.body, { color: muted }]}>
-            We do not sell your personal information. Your username, avatar, and game statistics are visible to other players. We may share data with service providers who help us operate the game, and when required by law.
+            GammaGames does not sell your personal information. Your username, avatar, and game statistics are visible to other players. GammaGames may share data with service providers who help operate the game, and when required by law.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>5. Your Rights</Text>
@@ -54,14 +54,14 @@ export default function PrivacyPolicyScreen() {
             You can update your profile information in-app. You may request to view, export, or delete your personal data by contacting support. Account deletion will remove your profile and personal information, though anonymized game statistics may be retained.
           </Text>
 
-          <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>6. Children's Privacy</Text>
+          <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>6. Children&apos;s Privacy</Text>
           <Text style={[styles.body, { color: muted }]}>
-            Palindrome is not directed to children under 13. We do not knowingly collect information from children under 13. If you believe a child has provided us with personal information, please contact us.
+            Palindrome is not directed to children under 13. GammaGames does not knowingly collect information from children under 13. If you believe a child has provided GammaGames with personal information, please contact GammaGames.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>7. Changes to This Policy</Text>
           <Text style={[styles.body, { color: muted }]}>
-            We may update this Privacy Policy from time to time. We will notify you of significant changes through the app or by email.
+            GammaGames may update this Privacy Policy from time to time. GammaGames will notify you of significant changes through the app or by email.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>8. Contact</Text>

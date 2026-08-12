@@ -41,37 +41,37 @@ export default function TermsScreen() {
             You agree to play fairly and not to cheat, exploit bugs, use automated tools or modified clients, or manipulate scores and leaderboards. You must not harass, threaten, or abuse other players, or upload offensive usernames or avatar images.
           </Text>
           <Text style={[styles.body, { color: muted }]}>
-            You must not attempt to disrupt, reverse engineer, or gain unauthorized access to our servers, multiplayer services, or other players' accounts.
+            You must not attempt to disrupt, reverse engineer, or gain unauthorized access to GammaGames servers, multiplayer services, or other players&apos; accounts.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>4. User Content</Text>
           <Text style={[styles.body, { color: muted }]}>
-            You retain ownership of content you upload, such as avatar images. By uploading, you grant us a license to store and display that content within the app. We may remove content that violates these terms.
+            You retain ownership of content you upload, such as avatar images. By uploading, you grant GammaGames a license to store and display that content within the app. GammaGames may remove content that violates these terms.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>5. Game Content and Availability</Text>
           <Text style={[styles.body, { color: muted }]}>
-            All game content, including the PALINDROME® board, artwork, rules, and software, is owned by Gamma Games and protected by intellectual property laws. We may update, modify, or discontinue features, game modes, matchmaking, or the app itself at any time.
+            All game content, including the PALINDROME® board, artwork, rules, and software, is owned by GammaGames and protected by intellectual property laws. GammaGames may update, modify, or discontinue features, game modes, matchmaking, or the app itself at any time.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>6. Suspension and Termination</Text>
           <Text style={[styles.body, { color: muted }]}>
-            We may suspend or terminate your account if you violate these terms, cheat, or abuse other players. You may delete your account at any time by contacting support.
+            GammaGames may suspend or terminate your account if you violate these terms, cheat, or abuse other players. You may delete your account at any time by contacting support.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>7. Disclaimer and Liability</Text>
           <Text style={[styles.body, { color: muted }]}>
-            The app is provided on an "as is" and "as available" basis without warranties of any kind. We are not liable for lost game progress, scores, service interruptions, or indirect damages arising from your use of the app, to the extent permitted by law.
+            The app is provided on an &quot;as is&quot; and &quot;as available&quot; basis without warranties of any kind. GammaGames is not liable for lost game progress, scores, service interruptions, or indirect damages arising from your use of the app, to the extent permitted by law.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>8. Privacy</Text>
           <Text style={[styles.body, { color: muted }]}>
-            Your use of Palindrome is also governed by our Privacy Policy, which explains what data we collect and how we use it.
+            Your use of Palindrome is also governed by GammaGames Privacy Policy, which explains what data GammaGames collects and how GammaGames uses it.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>9. Changes to These Terms</Text>
           <Text style={[styles.body, { color: muted }]}>
-            We may revise these terms from time to time. Continued use of the app after changes take effect means you accept the revised terms.
+            GammaGames may revise these terms from time to time. Continued use of the app after changes take effect means you accept the revised terms.
           </Text>
 
           <Text style={[styles.body, { color: text, fontFamily: 'Geist-Bold' }]}>10. Contact</Text>

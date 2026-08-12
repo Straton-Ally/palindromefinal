@@ -6,10 +6,12 @@ import * as Font from 'expo-font';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform, StyleSheet } from 'react-native';
+import { Image, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import 'react-native-url-polyfill/auto';
 
 const WEB_TITLE = 'PALINDROME | GAMMA GAMES BY OXFORD';
+const PLAY_STORE_BADGE = require('../assets/images/play-store.png');
+const APP_STORE_BADGE = require('../assets/images/app-store.png');
 
 const webFontCss = `
 @font-face {
@@ -43,6 +45,52 @@ body::-webkit-scrollbar,
 }
 `;
 
+function MobileStoreOverlay() {
+  const { theme } = useThemeContext();
+  const { width } = useWindowDimensions();
+  const isTouchDevice =
+    Platform.OS === 'web' &&
+    typeof navigator !== 'undefined' &&
+    navigator.maxTouchPoints > 0;
+  const shouldShow = Platform.OS === 'web' && (width <= 1024 || (isTouchDevice && width <= 1366));
+
+  if (!shouldShow) return null;
+
+  const isDark = theme === 'dark';
+  const textColor = isDark ? '#FFFFFF' : '#0F172A';
+  const mutedColor = isDark ? 'rgba(255,255,255,0.72)' : 'rgba(15,23,42,0.72)';
+
+  return (
+    <View style={[styles.storeOverlay, { backgroundColor: isDark ? '#050816' : '#F8FBFF' }]}>
+      <View style={styles.storePanel}>
+        <Image source={require('../assets/images/bulldog.png')} style={styles.storeLogo} resizeMode="contain" />
+        <Text style={[styles.storeTitle, { color: textColor }]}>Download Palindrome</Text>
+        <Text style={[styles.storeCopy, { color: mutedColor }]}>
+          Palindrome is best played in the native mobile app.
+        </Text>
+        <View style={styles.storeBadges}>
+          <Pressable
+            onPress={() => undefined}
+            accessibilityRole="button"
+            accessibilityLabel="Download on the App Store"
+            style={styles.storeBadgeButton}
+          >
+            <Image source={APP_STORE_BADGE} style={styles.storeBadge} resizeMode="contain" />
+          </Pressable>
+          <Pressable
+            onPress={() => undefined}
+            accessibilityRole="button"
+            accessibilityLabel="Get it on Google Play"
+            style={styles.storeBadgeButton}
+          >
+            <Image source={PLAY_STORE_BADGE} style={styles.storeBadge} resizeMode="contain" />
+          </Pressable>
+        </View>
+      </View>
+    </View>
+  );
+}
+
 const SplashScreen = Platform.select({
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   web: require('../screens/loadscreen.web').default,
@@ -67,6 +115,7 @@ const lightGradient = ['#FFFFFF', '#E2E8F0'] as const;
       style={styles.gradient}
     >
       <Stack screenOptions={{ headerShown: false }} />
+      <MobileStoreOverlay />
     </LinearGradient>
   );
 }
@@ -154,5 +203,52 @@ export default function RootLayout() {
 const styles = StyleSheet.create({
   gradient: {
     flex: 1,
+  },
+  storeOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 28,
+    zIndex: 1000,
+  },
+  storePanel: {
+    width: '100%',
+    maxWidth: 420,
+    alignItems: 'center',
+  },
+  storeLogo: {
+    width: 120,
+    height: 120,
+    marginBottom: 22,
+  },
+  storeTitle: {
+    fontFamily: 'Geist-Bold',
+    fontSize: 30,
+    lineHeight: 36,
+    textAlign: 'center',
+  },
+  storeCopy: {
+    marginTop: 12,
+    fontFamily: 'Geist-Regular',
+    fontSize: 16,
+    lineHeight: 22,
+    textAlign: 'center',
+  },
+  storeBadges: {
+    width: '100%',
+    marginTop: 28,
+    gap: 14,
+    alignItems: 'center',
+  },
+  storeBadgeButton: {
+    width: '100%',
+    maxWidth: 240,
+    height: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  storeBadge: {
+    width: '100%',
+    height: '100%',
   },
 });
