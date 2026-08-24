@@ -1,11 +1,7 @@
 import { getSupabaseClient } from '@/supabase';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {
-  GoogleSignin,
-  isErrorWithCode,
-  statusCodes,
-} from '@react-native-google-signin/google-signin';
 import * as AppleAuthentication from 'expo-apple-authentication';
+import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
 import { Platform } from 'react-native';
@@ -21,10 +17,72 @@ export interface AuthResult {
   user?: AuthUser | null;
   error?: string;
   code?: string;
+  /**
+   * Raw diagnostic detail for the failure. Populated for native Google/Apple
+   * sign-in failures so release builds can show the real underlying error
+   * instead of a generic "DEVELOPER_ERROR" string.
+   */
+  debug?: string;
 }
 
 let passwordResetHandoffActive = false;
 const WEB_AUTH_ORIGIN = 'https://palindrome.gammagamesbyoxford.com';
+
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '';
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || '';
+const OAUTH_REDIRECT_TIMEOUT_MS = 45_000;
+
+/**
+ * Set EXPO_PUBLIC_AUTH_DEBUG=1 to surface the raw native error in the UI.
+ * Deliberately native-only: the same .env feeds the web build, and the live
+ * site must never render raw diagnostics. On web the detail is logged only.
+ */
+const AUTH_DEBUG = process.env.EXPO_PUBLIC_AUTH_DEBUG === '1' && Platform.OS !== 'web';
+
+const appIdentifier = () =>
+  (Platform.OS === 'ios'
+    ? Constants.expoConfig?.ios?.bundleIdentifier
+    : Constants.expoConfig?.android?.package) ?? 'unknown';
+
+const googleConfigSnapshot = () =>
+  [
+    `platform=${Platform.OS}`,
+    `appId=${appIdentifier()}`,
+    `webClientId=${GOOGLE_WEB_CLIENT_ID || 'MISSING'}`,
+    `iosClientId=${GOOGLE_IOS_CLIENT_ID || 'not-set'}`,
+  ].join(' | ');
+
+const describeError = (error: any) => {
+  const fields: string[] = [
+    `code=${error?.code ?? 'none'}`,
+    `message=${error?.message ?? 'none'}`,
+  ];
+
+  if (error?.name) fields.push(`name=${error.name}`);
+  if (error?.domain) fields.push(`domain=${error.domain}`);
+  if (error?.userInfo) {
+    try {
+      fields.push(`userInfo=${JSON.stringify(error.userInfo)}`);
+    } catch {
+      fields.push('userInfo=[unserializable]');
+    }
+  }
+
+  return fields.join(' | ');
+};
+
+const buildAuthDebugReport = (stage: string, error: any) => {
+  const report = `[${stage}] ${describeError(error)} || config: ${googleConfigSnapshot()}`;
+  // Always logged, even in release builds, so `adb logcat` shows the real cause.
+  console.error(`[auth] ${report}`);
+  return report;
+};
+
+const withDebug = (result: AuthResult, report: string): AuthResult => ({
+  ...result,
+  debug: report,
+  error: AUTH_DEBUG ? `${result.error ?? 'Sign-in failed'}\n\n${report}` : result.error,
+});
 
 export const isPasswordResetHandoffActive = () => passwordResetHandoffActive;
 export const clearPasswordResetHandoff = () => {
@@ -71,18 +129,55 @@ const getWebAuthOrigin = () =>
     ? window.location.origin
     : WEB_AUTH_ORIGIN;
 
-class AuthService {
-  constructor() {
-    // Configure Google Sign-In for native platforms
-    if (Platform.OS !== 'web') {
-      GoogleSignin.configure({
-        webClientId: process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || '',
-        scopes: ['profile', 'email'],
-        offlineAccess: true,
-      });
-    }
-  }
+const isExpectedOAuthRedirect = (url: string, redirectTo: string) => {
+  if (url.startsWith(redirectTo)) return true;
 
+  try {
+    const actual = new URL(url);
+    const expected = new URL(redirectTo);
+    return (
+      actual.protocol === expected.protocol &&
+      actual.host === expected.host &&
+      actual.pathname === expected.pathname
+    );
+  } catch {
+    return false;
+  }
+};
+
+const waitForOAuthRedirect = (redirectTo: string) => {
+  let settled = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let subscription: { remove: () => void } | undefined;
+
+  const stop = () => {
+    if (timeout) clearTimeout(timeout);
+    subscription?.remove();
+  };
+
+  const promise = new Promise<string | null>((resolve) => {
+    const finish = (url: string | null) => {
+      if (settled) return;
+      settled = true;
+      stop();
+      resolve(url);
+    };
+
+    subscription = Linking.addEventListener('url', ({ url }) => {
+      if (isExpectedOAuthRedirect(url, redirectTo)) finish(url);
+    });
+
+    void Linking.getInitialURL().then((url) => {
+      if (url && isExpectedOAuthRedirect(url, redirectTo)) finish(url);
+    });
+
+    timeout = setTimeout(() => finish(null), OAUTH_REDIRECT_TIMEOUT_MS);
+  });
+
+  return { promise, stop };
+};
+
+class AuthService {
   private async signInWithNativeOAuth(provider: 'google' | 'apple'): Promise<AuthResult> {
     const supabase = getSupabaseClient();
     const redirectTo = Linking.createURL('auth/callback');
@@ -96,20 +191,59 @@ class AuthService {
       },
     });
 
-    if (error) return { success: false, error: error.message, code: (error as any).code };
+    if (error) {
+      return withDebug(
+        { success: false, error: error.message, code: (error as any).code },
+        buildAuthDebugReport(`supabase.signInWithOAuth(${provider})`, error)
+      );
+    }
     if (!data?.url) return { success: false, error: 'Missing OAuth URL' };
 
-    const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
-    if (result.type !== 'success' || !result.url) return { success: false, error: 'Sign in canceled' };
+    const redirectWaiter = waitForOAuthRedirect(redirectTo);
 
-    return await this.completeOAuthRedirect(result.url);
+    try {
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectTo);
+      if (result.type === 'success' && result.url) {
+        return await this.completeOAuthRedirect(result.url);
+      }
+
+      const redirectUrl = await redirectWaiter.promise;
+      if (redirectUrl) return await this.completeOAuthRedirect(redirectUrl);
+
+      // `dismiss`/`cancel` is the user backing out. Anything else means the
+      // redirect never came back — usually `redirectTo` is not in Supabase's
+      // allowed Redirect URLs list.
+      const report = buildAuthDebugReport(`webBrowser.${provider}`, {
+        code: result.type,
+        message: `openAuthSessionAsync returned "${result.type}" for redirectTo=${redirectTo}`,
+      });
+
+      return withDebug(
+        {
+          success: false,
+          error:
+            result.type === 'dismiss' || result.type === 'cancel'
+              ? 'Sign in canceled'
+              : 'Sign in did not complete',
+          code: result.type,
+        },
+        report
+      );
+    } finally {
+      redirectWaiter.stop();
+    }
   }
 
   async exchangeCodeForSession(code: string): Promise<AuthResult> {
     try {
       const supabase = getSupabaseClient();
       const { data, error } = await supabase.auth.exchangeCodeForSession(code);
-      if (error) return { success: false, error: error.message, code: (error as any).code };
+      if (error) {
+        return withDebug(
+          { success: false, error: error.message, code: (error as any).code },
+          buildAuthDebugReport('supabase.exchangeCodeForSession', error)
+        );
+      }
       return { success: true, user: data.user ? toAuthUser(data.user) : null };
     } catch (e: any) {
       return { success: false, error: e?.message || 'Failed to complete sign in' };
@@ -148,9 +282,8 @@ class AuthService {
 
   async signInWithGoogle(): Promise<AuthResult> {
     try {
-      const supabase = getSupabaseClient();
-
       if (Platform.OS === 'web') {
+        const supabase = getSupabaseClient();
         // Web: Use Supabase OAuth flow
         const redirectTo = `${getWebAuthOrigin()}/auth/callback`;
         const { data, error } = await supabase.auth.signInWithOAuth({
@@ -163,54 +296,9 @@ class AuthService {
         return { success: true };
       }
 
-      // Native: Use Google Sign-In SDK
-      try {
-        // Check if Google Play Services are available
-        await GoogleSignin.hasPlayServices();
-        
-        // Sign in with Google
-        const userInfo = await GoogleSignin.signIn();
-        
-        // Extract ID token (handle different response structures)
-        const idToken = userInfo.data?.idToken || (userInfo as any).idToken;
-
-        if (!idToken) {
-          return { success: false, error: 'No ID token found' };
-        }
-
-        // Sign in to Supabase with the Google ID token
-        const { data, error } = await supabase.auth.signInWithIdToken({
-          provider: 'google',
-          token: idToken,
-        });
-
-        if (error) {
-          return { success: false, error: error.message, code: (error as any).code };
-        }
-
-        return { success: true, user: data.user ? toAuthUser(data.user) : null };
-      } catch (error: any) {
-        // Handle Google Sign-In specific errors
-        if (isErrorWithCode(error)) {
-          switch (error.code) {
-            case statusCodes.SIGN_IN_CANCELLED:
-              return { success: false, error: 'Sign in cancelled' };
-            case statusCodes.IN_PROGRESS:
-              return { success: false, error: 'Sign in already in progress' };
-            case statusCodes.PLAY_SERVICES_NOT_AVAILABLE:
-              return { success: false, error: 'Google Play Services not available' };
-            default:
-              if (error.code === 'DEVELOPER_ERROR') {
-                return await this.signInWithNativeOAuth('google');
-              }
-              return { success: false, error: error.message || 'Google sign-in failed' };
-          }
-        }
-        if (error?.code === 'DEVELOPER_ERROR' || error?.message?.includes('DEVELOPER_ERROR')) {
-          return await this.signInWithNativeOAuth('google');
-        }
-        return { success: false, error: error?.message || 'Google sign-in failed' };
-      }
+      // Native Google auth goes through browser OAuth. It avoids Android
+      // signing-certificate OAuth mismatches in Play-delivered builds.
+      return await this.signInWithNativeOAuth('google');
     } catch (e: any) {
       return { success: false, error: e?.message || 'Failed to sign in with Google' };
     }

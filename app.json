@@ -26,6 +26,7 @@
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
       "package": "com.gammagames.palindromeuk",
+      "versionCode": 8,
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.RECORD_AUDIO",
@@ -47,7 +48,6 @@
       "expo-router",
       "expo-font",
       "expo-apple-authentication",
-      "@react-native-google-signin/google-signin",
       "./plugins/withAndroidReleaseSigning",
       [
         "expo-splash-screen",

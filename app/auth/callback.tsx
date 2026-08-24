@@ -1,12 +1,15 @@
 import { authService } from '@/authService';
 import { useThemeContext } from '@/context/ThemeContext';
+import * as Linking from 'expo-linking';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Text, View } from 'react-native';
 
 export default function AuthCallbackScreen() {
   const { theme } = useThemeContext();
   const params = useLocalSearchParams();
+  const deepLinkUrl = Linking.useURL();
+  const completedRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -19,10 +22,27 @@ export default function AuthCallbackScreen() {
       return;
     }
 
-    void (async () => {
-      let url = typeof window !== 'undefined' ? window.location.href : '';
+    if (completedRef.current) return;
 
-      if (!url) {
+    const completeWithTimeout = (url: string) =>
+      Promise.race([
+        authService.completeOAuthRedirect(url),
+        new Promise<Awaited<ReturnType<typeof authService.completeOAuthRedirect>>>((resolve) =>
+          setTimeout(() => resolve({ success: false, error: 'OAuth callback timed out' }), 20_000)
+        ),
+      ]);
+
+    void (async () => {
+      const urls: string[] = [];
+      const addUrl = (url?: string | null) => {
+        if (url && !urls.includes(url)) urls.push(url);
+      };
+
+      addUrl(deepLinkUrl);
+      addUrl(typeof window !== 'undefined' ? window.location.href : '');
+      addUrl(await Linking.getInitialURL());
+
+      if (!urls.length) {
         // Construct URL from params if we are on native and deep linked
         const base = 'https://localhost/auth/callback';
         const query = new URLSearchParams();
@@ -34,23 +54,31 @@ export default function AuthCallbackScreen() {
         
         // Only construct if we have relevant params
         if (query.toString()) {
-           url = `${base}?${query.toString()}`;
+          addUrl(`${base}?${query.toString()}`);
         }
       }
 
-      if (url) {
-        const result = await authService.completeOAuthRedirect(url);
+      let lastError: string | null = null;
+      for (const url of urls) {
+        const result = await completeWithTimeout(url);
         if (result.success) {
+          completedRef.current = true;
           router.replace('/main');
-        } else {
-          setError(result.error || 'Failed to complete sign in');
+          return;
         }
-      } else {
-         // If no URL and no params, we might just be waiting or loaded incorrectly
-         // But we shouldn't error immediately if it's just mounting
+        lastError = result.error || 'Failed to complete sign in';
       }
+
+      const user = await authService.getSessionUser();
+      if (user) {
+        completedRef.current = true;
+        router.replace('/main');
+        return;
+      }
+
+      if (lastError) setError(lastError);
     })();
-  }, [params.code, params.access_token, params.refresh_token, params.error, params.error_description]);
+  }, [deepLinkUrl, params.code, params.access_token, params.refresh_token, params.error, params.error_description]);
 
   return (
     <View

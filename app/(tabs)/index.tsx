@@ -118,7 +118,11 @@ export default function LoginScreen() {
       const result = await authService.signInWithGoogle();
       if (result.success) {
         router.replace('/main');
+      } else if (result.code === 'oauth_handoff') {
+        return;
       } else {
+        // `result.error` already carries the raw native detail when
+        // EXPO_PUBLIC_AUTH_DEBUG=1; otherwise it stays user-friendly.
         Alert.alert('Login Failed', result.error || 'Google sign-in failed');
       }
     } catch (error: any) {
