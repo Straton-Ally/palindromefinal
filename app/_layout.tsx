@@ -10,7 +10,7 @@ import { Image, Platform, Pressable, StyleSheet, Text, useWindowDimensions, View
 import 'react-native-url-polyfill/auto';
 
 const WEB_TITLE = 'PALINDROME | GAMMA GAMES BY OXFORD';
-const PLAY_STORE_BADGE = require('../assets/images/play-store.png');
+const PLAY_STORE_BADGE = require('../assets/images/play-store-badge.png');
 const APP_STORE_BADGE = require('../assets/images/app-store.png');
 const SPLASH_BACKGROUND = require('../assets/images/bg.png');
 const BULLDOG_LOGO = require('../assets/images/bulldog.png');
@@ -45,6 +45,16 @@ body::-webkit-scrollbar,
   height: 0;
   display: none;
 }
+@media (max-width: 1024px), (pointer: coarse) {
+  html, body, #root {
+    height: 100%;
+    min-height: 100%;
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    background: #000428;
+  }
+}
 `;
 
 function MobileStoreOverlay() {
@@ -62,9 +72,9 @@ function MobileStoreOverlay() {
       <Image source={SPLASH_BACKGROUND} style={styles.storeBackground} resizeMode="cover" />
       <View style={styles.storePanel}>
         <Image source={BULLDOG_LOGO} style={styles.storeLogo} resizeMode="contain" />
-        <Text style={styles.storeTitle}>Download Palindrome</Text>
+        <Text style={styles.storeTitle}>Download PALINDROME®</Text>
         <Text style={styles.storeCopy}>
-          Palindrome is best played in the native mobile app.
+          PALINDROME® by GAMMA GAMES BY OXFORD is best played on Mobile
         </Text>
         <View style={styles.storeBadges}>
           <Pressable
@@ -73,7 +83,7 @@ function MobileStoreOverlay() {
             accessibilityLabel="Download on the App Store"
             style={styles.storeBadgeButton}
           >
-            <Image source={APP_STORE_BADGE} style={styles.storeBadge} resizeMode="contain" />
+            <Image source={APP_STORE_BADGE} style={styles.appStoreBadge} resizeMode="contain" />
           </Pressable>
           <Pressable
             onPress={() => undefined}
@@ -81,7 +91,7 @@ function MobileStoreOverlay() {
             accessibilityLabel="Get it on Google Play"
             style={styles.storeBadgeButton}
           >
-            <Image source={PLAY_STORE_BADGE} style={styles.storeBadge} resizeMode="contain" />
+            <Image source={PLAY_STORE_BADGE} style={styles.playStoreBadge} resizeMode="contain" />
           </Pressable>
         </View>
       </View>
@@ -243,22 +253,22 @@ const styles = StyleSheet.create({
   storeBadges: {
     width: '100%',
     marginTop: 28,
-    gap: 14,
+    gap: 12,
     alignItems: 'center',
   },
   storeBadgeButton: {
     width: 252,
-    height: 76,
+    height: 84,
     alignItems: 'center',
-    backgroundColor: '#000000',
-    borderColor: 'rgba(255,255,255,0.34)',
-    borderRadius: 10,
-    borderWidth: 1,
     justifyContent: 'center',
     overflow: 'hidden',
   },
-  storeBadge: {
-    width: 224,
-    height: 58,
+  appStoreBadge: {
+    width: 252,
+    height: 84,
+  },
+  playStoreBadge: {
+    width: 252,
+    height: 84,
   },
 });
