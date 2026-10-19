@@ -8,12 +8,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
-    Animated,
     BackHandler,
-    GestureResponderEvent,
     Image,
-    PanResponder,
-    PanResponderGestureState,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -21,8 +17,21 @@ import {
     View,
     useWindowDimensions
 } from 'react-native';
+import { GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, {
+    cancelAnimation,
+    interpolate,
+    useAnimatedRef,
+    useAnimatedStyle,
+    useSharedValue,
+    withDelay,
+    withSequence,
+    withTiming,
+    type AnimatedRef,
+    type SharedValue,
+} from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { SpotlightTourProvider, type TourState, type TourStep } from 'react-native-spotlight-tour';
+import { SpotlightTourProvider, type TourState, type TourStep } from '@/components/tour/SpotlightTour';
 import Svg, { Defs, Stop, LinearGradient as SvgLinearGradient, Text as SvgText } from 'react-native-svg';
 import { Switch } from 'react-native-switch';
 import { Video, ResizeMode } from 'expo-av';
@@ -36,6 +45,8 @@ import { DEFAULT_GAME_GRADIENTS } from '@/lib/gameColors';
 import { createInitialState, createSinglePlayerInitialState, scoreNewPalindromes } from '@/lib/gameEngine';
 import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, subscribeToMatch, subscribeToRacePresence, updateLiveScore, type Match, type MatchPlayer } from '@/lib/matchmaking';
 import { getMyBestSinglePlayer, saveSinglePlayerRun } from '@/lib/singlePlayer';
+import { NO_CELL, useBoardDrag, useBoardSharedState, type BoardGeometry } from '@/components/game/boardDrag';
+import { SkiaGameBoard } from '@/components/game/SkiaGameBoard';
 
 const COLOR_BLIND_TOKENS: Record<ColorBlindMode, readonly string[]> = {
   symbols: ['●', '▲', '■', '◆', '★'],
@@ -48,138 +59,52 @@ function getColorBlindToken(mode: ColorBlindMode, index: number) {
   return COLOR_BLIND_TOKENS[mode][index] ?? '?';
 }
 
-type BoardLayout = { x: number; y: number; width: number; height: number };
+// Board geometry must match styles.board (padding 6) and the old styles.cell (27x30, margin 1.5, radius 6).
+const BOARD_GEOMETRY: BoardGeometry = {
+  gridSize: 11,
+  cellWidth: 27,
+  cellHeight: 30,
+  cellMargin: 1.5,
+  cellRadius: 6,
+};
 
-const DraggableBlock = ({
+const DraggableBlock = React.memo(function DraggableBlock({
   index,
   gradient,
   blockCount,
-  boardLayout,
-  measureBoardLayout,
-  gridSize,
+  gridRef,
+  hoverCell,
+  occupied,
   onDrop,
   onPickup,
-  onDragUpdate
 }: {
   index: number;
   gradient: readonly [string, string];
   blockCount: number;
-  boardLayout: BoardLayout | null;
-  measureBoardLayout: () => Promise<BoardLayout | null>;
-  gridSize: number;
+  gridRef: AnimatedRef<View>;
+  hoverCell: SharedValue<number>;
+  occupied: SharedValue<number[]>;
   onDrop: (row: number, col: number, colorIndex: number) => void;
-  onPickup: () => void;
-  onDragUpdate: (row: number | null, col: number | null) => void;
-}) => {
+  onPickup: (colorIndex: number) => void;
+}) {
   const { colorBlindEnabled, colorBlindMode } = useSettings();
-  const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const [isDragging, setIsDragging] = useState(false);
   const token = colorBlindEnabled ? getColorBlindToken(colorBlindMode, index) : null;
-  const lastDragCellRef = useRef<{ row: number | null; col: number | null }>({ row: null, col: null });
-  const dragTargetOffsetY = 50;
+  const blockRef = useAnimatedRef<View>();
 
-  const latest = useRef({
-    boardLayout,
-    blockCount,
-    gridSize,
-    measureBoardLayout,
-    onDragUpdate,
-    onDrop,
-    onPickup,
+  const { gesture, translateStyle } = useBoardDrag({
+    enabled: blockCount > 0,
+    geometry: BOARD_GEOMETRY,
+    gridRef,
+    blockRef,
+    hoverCell,
+    occupied,
+    blockSize: 50,
+    hoverOnlyEmpty: true,
+    onPickup: () => onPickup(index),
+    onDrop: (row, col) => onDrop(row, col, index),
+    onDraggingChange: setIsDragging,
   });
-
-  useEffect(() => {
-    latest.current = {
-      boardLayout,
-      blockCount,
-      gridSize,
-      measureBoardLayout,
-      onDragUpdate,
-      onDrop,
-      onPickup,
-    };
-  }, [boardLayout, blockCount, gridSize, measureBoardLayout, onDragUpdate, onDrop, onPickup]);
-
-  const getCellFromPoint = (touchX: number, touchY: number, layout: BoardLayout) => {
-    const boardPadding = 6;
-    const cellMargin = 1.5;
-    const cellWidth = 27;
-    const cellHeight = 30;
-    const stepX = cellWidth + cellMargin * 2;
-    const stepY = cellHeight + cellMargin * 2;
-
-    const innerWidth = Math.max(1, layout.width - boardPadding * 2);
-    const innerHeight = Math.max(1, layout.height - boardPadding * 2);
-    const gridPixelWidth = latest.current.gridSize * stepX;
-    const gridPixelHeight = latest.current.gridSize * stepY;
-
-    const extraX = Math.max(0, (innerWidth - gridPixelWidth) / 2);
-    const extraY = Math.max(0, innerHeight - gridPixelHeight) > 0.5 ? Math.max(0, (innerHeight - gridPixelHeight) / 2) : 0;
-
-    const originX = layout.x + boardPadding + extraX + cellMargin;
-    const originY = layout.y + boardPadding + extraY + cellMargin;
-
-    const localX = touchX - originX;
-    const localY = touchY - originY;
-    const col = Math.floor(localX / stepX);
-    const row = Math.floor(localY / stepY);
-
-    if (row < 0 || row >= latest.current.gridSize || col < 0 || col >= latest.current.gridSize) {
-      return { row: null, col: null };
-    }
-    return { row, col };
-  };
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => latest.current.blockCount > 0,
-      onPanResponderGrant: () => {
-        setIsDragging(true);
-        lastDragCellRef.current = { row: null, col: null };
-        latest.current.onPickup();
-      },
-      onPanResponderMove: (e: GestureResponderEvent, gestureState: PanResponderGestureState) => {
-        pan.setValue({ x: gestureState.dx, y: gestureState.dy });
-
-        const layout = latest.current.boardLayout;
-        if (!layout) return;
-
-        const touchX = (e.nativeEvent as any).pageX ?? gestureState.moveX;
-        const touchY = (e.nativeEvent as any).pageY ?? gestureState.moveY;
-        const { row, col } = getCellFromPoint(touchX, touchY - dragTargetOffsetY, layout);
-
-        const last = lastDragCellRef.current;
-        if (last.row === row && last.col === col) return;
-        lastDragCellRef.current = { row, col };
-        latest.current.onDragUpdate(row, col);
-      },
-      onPanResponderRelease: (e: GestureResponderEvent, gestureState: PanResponderGestureState) => {
-        setIsDragging(false);
-        const dropX = (e.nativeEvent as any).pageX ?? gestureState.moveX;
-        const dropY = (e.nativeEvent as any).pageY ?? gestureState.moveY;
-
-        void (async () => {
-          const measuredLayout = await latest.current.measureBoardLayout();
-          const layoutToUse = measuredLayout ?? latest.current.boardLayout;
-          if (!layoutToUse) return;
-          const { row, col } = getCellFromPoint(dropX, dropY - dragTargetOffsetY, layoutToUse);
-          if (row !== null && col !== null) {
-            latest.current.onDrop(row, col, index);
-          }
-        })();
-
-        lastDragCellRef.current = { row: null, col: null };
-        latest.current.onDragUpdate(null, null);
-        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
-      },
-      onPanResponderTerminate: () => {
-        setIsDragging(false);
-        lastDragCellRef.current = { row: null, col: null };
-        latest.current.onDragUpdate(null, null);
-        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
-      }
-    })
-  ).current;
 
   return (
     <View style={styles.colorBlockWrapper}>
@@ -197,35 +122,38 @@ const DraggableBlock = ({
       </View>
 
       {/* Floating draggable block */}
-      <Animated.View
-        style={[
-          styles.colorBlock,
-          {
-            position: 'absolute',
-            top: 0,
-            left: 0,
-            transform: pan.getTranslateTransform(),
-            zIndex: isDragging ? 1000 : 1,
-            elevation: isDragging ? 10 : 0,
-          }
-        ]}
-        {...panResponder.panHandlers}
-      >
-        <LinearGradient
-          colors={gradient}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.gradientColorBlock}
+      <GestureDetector gesture={gesture}>
+        <Animated.View
+          ref={blockRef}
+          collapsable={false}
+          style={[
+            styles.colorBlock,
+            {
+              position: 'absolute',
+              top: 0,
+              left: 0,
+              zIndex: isDragging ? 1000 : 1,
+              elevation: isDragging ? 10 : 0,
+            },
+            translateStyle,
+          ]}
         >
-          {/* Hide number when dragging for "picking one" look */}
-          {token ? <Text style={styles.colorBlindBlockTokenCorner}>{blockCount}</Text> : null}
-          {!isDragging && <Text style={token ? styles.colorBlindBlockTokenCenter : styles.blockText}>{token ? token : blockCount}</Text>}
-          {isDragging && token && <Text style={styles.colorBlindBlockTokenCenter}>{token}</Text>}
-        </LinearGradient>
-      </Animated.View>
+          <LinearGradient
+            colors={gradient}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.gradientColorBlock}
+          >
+            {/* Hide number when dragging for "picking one" look */}
+            {token ? <Text style={styles.colorBlindBlockTokenCorner}>{blockCount}</Text> : null}
+            {!isDragging && <Text style={token ? styles.colorBlindBlockTokenCenter : styles.blockText}>{token ? token : blockCount}</Text>}
+            {isDragging && token && <Text style={styles.colorBlindBlockTokenCenter}>{token}</Text>}
+          </LinearGradient>
+        </Animated.View>
+      </GestureDetector>
     </View>
   );
-};
+});
 
 const PaletteBlock = ({
   index,
@@ -427,7 +355,8 @@ function GameTourSpotSync(props: {
   const { current, status, changeSpot } = props.tour ?? {};
   const { scoreBoxRef, timerBoxRef, hintsBoxRef, blocksBoxRef, boardRef, controlsRowRef } = props;
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const yOffset = props.topInset;
+  // Spots are passed in window coordinates; the tour provider converts them to its own space.
+  const yOffset = 0;
 
   useEffect(() => {
     if (status !== 'running') return;
@@ -622,7 +551,7 @@ export default function GameLayout() {
   // ✅ Get theme and toggle function from context
   const { theme, toggleTheme, colors } = useThemeContext();
   const { soundEnabled, hapticsEnabled, palindromeAnimationsEnabled, colorBlindEnabled, colorBlindMode, interactionMode, customGameColors, setSoundEnabled, setHapticsEnabled, setPalindromeAnimationsEnabled, setColorBlindEnabled, setInteractionMode } = useSettings();
-  const colorGradients = customGameColors ?? [...DEFAULT_GAME_GRADIENTS];
+  const colorGradients = useMemo(() => customGameColors ?? [...DEFAULT_GAME_GRADIENTS], [customGameColors]);
   const { playPickupSound, playDropSound, playErrorSound, playSuccessSound } = useSound();
   const insets = useSafeAreaInsets();
   const { height: windowHeight } = useWindowDimensions();
@@ -703,7 +632,15 @@ export default function GameLayout() {
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [pickTargetCell, setPickTargetCell] = useState<{ row: number; col: number } | null>(null);
   const [pickSelectedColor, setPickSelectedColor] = useState<number | null>(null);
-  const noHintsAnim = useRef(new Animated.Value(0)).current;
+  const noHintsAnim = useSharedValue(0);
+  const hintsCountStyle = useAnimatedStyle(() => ({
+    opacity: interpolate(noHintsAnim.value, [0, 1], [1, 0]),
+    transform: [{ scale: interpolate(noHintsAnim.value, [0, 1], [1, 0.98]) }],
+  }));
+  const noHintsFaceStyle = useAnimatedStyle(() => ({
+    opacity: noHintsAnim.value,
+    transform: [{ scale: interpolate(noHintsAnim.value, [0, 1], [0.98, 1]) }],
+  }));
 
   const triggerHaptic = useCallback((kind: 'pickup' | 'drop' | 'error' | 'success') => {
     if (!hapticsEnabled) return;
@@ -756,13 +693,12 @@ export default function GameLayout() {
   }, []);
 
   const flashNoHintsFace = useCallback(() => {
-    noHintsAnim.stopAnimation();
-    noHintsAnim.setValue(0);
-    Animated.sequence([
-      Animated.timing(noHintsAnim, { toValue: 1, duration: 180, useNativeDriver: true }),
-      Animated.delay(1000),
-      Animated.timing(noHintsAnim, { toValue: 0, duration: 250, useNativeDriver: true }),
-    ]).start();
+    cancelAnimation(noHintsAnim);
+    noHintsAnim.value = 0;
+    noHintsAnim.value = withSequence(
+      withTiming(1, { duration: 180 }),
+      withDelay(1000, withTiming(0, { duration: 250 })),
+    );
   }, [noHintsAnim]);
 
   const tourSteps = useMemo<TourStep[]>(() => {
@@ -857,8 +793,6 @@ export default function GameLayout() {
   const [feedback, setFeedback] = useState<{ text: string, color: string, id: number } | null>(null);
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [secondsElapsed, setSecondsElapsed] = useState(0);
-  const [dragOverCell, setDragOverCell] = useState<{ row: number; col: number } | null>(null);
-  const [, setDraggedColor] = useState<number | null>(null);
   const [wrongForcedTries, setWrongForcedTries] = useState(0);
 
   const [scoredCells, setScoredCells] = useState<string[]>([]);
@@ -875,8 +809,9 @@ export default function GameLayout() {
     };
   }, []);
 
-  const [boardLayout, setBoardLayout] = useState<BoardLayout | null>(null);
   const boardRef = useRef<View | null>(null);
+  const gridRef = useAnimatedRef<View>();
+  const { hoverCell, occupied } = useBoardSharedState(gridState);
   const gridStateRef = useRef(gridState);
   const blockCountsRef = useRef(blockCounts);
   const hintsRef = useRef(hints);
@@ -921,26 +856,9 @@ export default function GameLayout() {
   useEffect(() => {
     setPickTargetCell(null);
     setPickSelectedColor(null);
-    setDragOverCell(null);
-    setDraggedColor(null);
-  }, [interactionMode]);
+    hoverCell.value = NO_CELL;
+  }, [hoverCell, interactionMode]);
 
-  const measureBoardLayout = useCallback((): Promise<BoardLayout | null> => {
-    return new Promise((resolve) => {
-      const node = boardRef.current as any;
-      if (!node?.measureInWindow) {
-        resolve(null);
-        return;
-      }
-      node.measureInWindow((x: number, y: number, width: number, height: number) => {
-        resolve({ x, y, width, height });
-      });
-    });
-  }, []);
-
-  const center = Math.floor(gridSize / 2);
-  const word = 'PALINDROME®';
-  const halfWord = Math.floor(word.length / 2);
 
   const initializeGame = useCallback(() => {
     const initialState = createSinglePlayerInitialState();
@@ -959,7 +877,7 @@ export default function GameLayout() {
     setGameOver(null);
     setNewHighScore(false);
     setFeedback(null);
-    setDragOverCell(null);
+    hoverCell.value = NO_CELL;
     setActiveHint(null);
     setWrongForcedTries(0);
     wrongForcedTriesRef.current = 0;
@@ -973,7 +891,7 @@ export default function GameLayout() {
       clearTimeout(scoredCellsTimerRef.current);
       scoredCellsTimerRef.current = null;
     }
-  }, []);
+  }, [hoverCell]);
 
   useEffect(() => {
     if (matchId) return;
@@ -1316,14 +1234,23 @@ export default function GameLayout() {
 
   const findFirstScoringMove = (minLength: number) => {
     const colorGradientsCount = 5;
+    // Performance notes (results are identical to scoring each candidate against the previous grid):
+    // - an empty cell with no filled orthogonal neighbour can never form a palindrome, so it is skipped;
+    // - any new palindrome must pass through the candidate cell, so scoring only that anchor
+    //   (no previous-grid diff) gives the same yes/no answer far faster.
+    // - one scratch grid is mutated and restored instead of copying the board per candidate.
+    const current = gridStateRef.current;
+    const isFilled = (r: number, c: number) => r >= 0 && r < gridSize && c >= 0 && c < gridSize && current[r][c] !== null;
+    const tempGrid = current.map((rowArr) => [...rowArr]);
     for (let r = 0; r < gridSize; r++) {
       for (let c = 0; c < gridSize; c++) {
-        if (gridStateRef.current[r][c] !== null) continue;
+        if (current[r][c] !== null) continue;
+        if (!isFilled(r - 1, c) && !isFilled(r + 1, c) && !isFilled(r, c - 1) && !isFilled(r, c + 1)) continue;
         for (let colorIdx = 0; colorIdx < colorGradientsCount; colorIdx++) {
           if (blockCountsRef.current[colorIdx] <= 0) continue;
-          const tempGrid = gridStateRef.current.map((rowArr) => [...rowArr]);
           tempGrid[r][c] = colorIdx;
-          const sc = checkAndProcessPalindromes([{ row: r, col: c }], tempGrid, true, minLength, gridStateRef.current);
+          const sc = checkAndProcessPalindromes([{ row: r, col: c }], tempGrid, true, minLength);
+          tempGrid[r][c] = null;
           if (sc > 0) {
             return { row: r, col: c, colorIndex: colorIdx };
           }
@@ -1348,8 +1275,7 @@ export default function GameLayout() {
   };
 
   const handleDrop = (row: number, col: number, colorIndex: number) => {
-    setDragOverCell(null);
-    setDraggedColor(null);
+    hoverCell.value = NO_CELL;
 
     if (gameOver || pause || settingsVisible || scoringInProgressRef.current || (matchId && raceDisconnected)) {
       return false;
@@ -1452,11 +1378,12 @@ export default function GameLayout() {
       setFirstMoveActive(false);
       setFirstMovePlacements([]);
     } else {
-      const hadAnyScoringMoveBefore = !matchId ? !!findFirstScoringMove(3) : true;
       newGrid[row][col] = colorIndex;
       const attemptedScore = checkAndProcessPalindromes([{ row, col }], newGrid, true, 3, gridStateRef.current);
 
       if (attemptedScore <= 0) {
+        // Only needed for non-scoring moves; the board refs still hold the pre-move state here.
+        const hadAnyScoringMoveBefore = !matchId ? !!findFirstScoringMove(3) : true;
         if (!matchId && !hadAnyScoringMoveBefore) {
           nextBlockCounts[colorIndex] = Math.max(0, nextBlockCounts[colorIndex] - 1);
           setGridState(newGrid);
@@ -1555,129 +1482,32 @@ export default function GameLayout() {
   };
 
 
-  const grid = Array.from({ length: gridSize }, (_, row) => (
-    <View key={row} style={styles.row}>
-      {Array.from({ length: gridSize }, (_, col) => {
-        const isBulldog = bulldogPositions.some(pos => pos.row === row && pos.col === col);
-        let letter: string | null = null;
-        if (row === center && col >= center - halfWord && col < center - halfWord + word.length) {
-          letter = word[col - (center - halfWord)];
-        }
-        if (col === center && row >= center - halfWord && row < center - halfWord + word.length) {
-          letter = word[row - (center - halfWord)];
-        }
+  const handleBoardCellPress = useCallback((row: number, col: number) => {
+    if (gridStateRef.current[row][col] !== null) {
+      playErrorSound();
+      triggerHaptic('error');
+      return;
+    }
+    setPickTargetCell((prev) => {
+      if (prev?.row === row && prev?.col === col) return null;
+      return { row, col };
+    });
+    triggerHaptic('pickup');
+  }, [playErrorSound, triggerHaptic]);
 
-        return (
-          <Pressable
-            key={col}
-            style={[
-              styles.cell,
-              {
-                backgroundColor:
-                  theme === 'dark' ? 'rgba(25,25,91,0.7)' : '#FFFFFF',
-                borderColor: theme === 'dark' ? 'rgba(255,255,255,0.1)' : '#CCDAE466',
-              },
-              (dragOverCell?.row === row && dragOverCell?.col === col) && {
-                backgroundColor: theme === 'dark' ? 'rgba(100, 200, 255, 0.4)' : 'rgba(100, 200, 255, 0.3)',
-                borderColor: '#4A9EFF',
-                borderWidth: 2,
-              }
-              ,
-              (interactionMode === 'pick' && pickTargetCell?.row === row && pickTargetCell?.col === col) && {
-                backgroundColor: theme === 'dark' ? 'rgba(100, 200, 255, 0.25)' : 'rgba(100, 200, 255, 0.18)',
-                borderColor: '#4A9EFF',
-                borderWidth: 2,
-              },
-              (activeHint?.row === row && activeHint?.col === col) && {
-                backgroundColor: theme === 'dark' ? 'rgba(100, 200, 255, 0.4)' : 'rgba(100, 200, 255, 0.3)',
-                borderColor: '#FFD700',
-                borderWidth: 2,
-                shadowColor: '#FFD700',
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: 0.8,
-                shadowRadius: 10,
-                elevation: 3,
-              },
-              scoredCells.includes(`${row},${col}`) && {
-                borderColor: '#FACC15',
-                borderWidth: 2,
-                shadowColor: '#FACC15',
-                shadowOffset: { width: 0, height: 0 },
-                shadowOpacity: 0.9,
-                shadowRadius: 10,
-                elevation: 4,
-              },
-            ]}
-            onPress={() => {
-              if (interactionMode === 'pick') {
-                if (gridStateRef.current[row][col] !== null) {
-                  playErrorSound();
-                  triggerHaptic('error');
-                  return;
-                }
-                setPickTargetCell((prev) => {
-                  if (prev?.row === row && prev?.col === col) return null;
-                  return { row, col };
-                });
-                triggerHaptic('pickup');
-                return;
-              }
-            }}
-          >
-            {gridState[row][col] !== null && (
-              <LinearGradient
-                colors={colorGradients[gridState[row][col]!]}
-                style={StyleSheet.absoluteFill}
-              />
-            )}
-            {activeHint?.row === row && activeHint?.col === col && (
-              <LinearGradient
-                colors={colorGradients[activeHint.colorIndex]}
-                style={[StyleSheet.absoluteFill, { opacity: 0.6 }]}
-              />
-            )}
-            {activeHint?.row === row && activeHint?.col === col && colorBlindEnabled && (
-              <View pointerEvents="none" style={styles.colorBlindTokenOverlay}>
-                <Text style={styles.colorBlindTokenText}>
-                  {getColorBlindToken(colorBlindMode, activeHint.colorIndex)}
-                </Text>
-              </View>
-            )}
-            {gridState[row][col] !== null && colorBlindEnabled && !letter && (
-              <View pointerEvents="none" style={styles.colorBlindTokenOverlay}>
-                <Text style={styles.colorBlindTokenText}>
-                  {getColorBlindToken(colorBlindMode, gridState[row][col]!)}
-                </Text>
-              </View>
-            )}
-            {gridState[row][col] !== null && colorBlindEnabled && letter && (
-              <Text style={styles.colorBlindTokenCorner}>
-                {getColorBlindToken(colorBlindMode, gridState[row][col]!)}
-              </Text>
-            )}
-            {isBulldog && (
-              <Image
-                source={require('../../assets/images/bulldog.png')}
-                style={styles.bulldogImage}
-                resizeMode="contain"
-              />
-            )}
-            {letter && (
-              <Text
-                style={[
-                  styles.letterText,
-                  { color: theme === 'dark' ? '#FFFFFF' : '#000000' },
-                ]}
-              >
-                {letter}
-              </Text>
-            )}
-            <View style={styles.innerShadow} />
-          </Pressable>
-        );
-      })}
-    </View>
-  ));
+  // Stable callbacks so the memoized DraggableBlocks only re-render when their own props change.
+  const handleDropRef = useRef(handleDrop);
+  handleDropRef.current = handleDrop;
+  const stableHandleDrop = useCallback((row: number, col: number, colorIndex: number) => {
+    handleDropRef.current(row, col, colorIndex);
+  }, []);
+  const handleBlockPickupRef = useRef<() => void>(() => {});
+  handleBlockPickupRef.current = () => {
+    playPickupSound();
+    triggerHaptic('pickup');
+    if (!isTimerRunning) setIsTimerRunning(true);
+  };
+  const stableHandleBlockPickup = useCallback(() => handleBlockPickupRef.current(), []);
 
   const blocks = colorGradients.map((gradient, index) => (
     interactionMode === 'pick' ? (
@@ -1695,30 +1525,17 @@ export default function GameLayout() {
         index={index}
         gradient={gradient}
         blockCount={blockCounts[index]}
-        boardLayout={boardLayout}
-        measureBoardLayout={measureBoardLayout}
-        gridSize={gridSize}
-        onDrop={handleDrop}
-        onPickup={() => {
-          playPickupSound();
-          triggerHaptic('pickup');
-          setDraggedColor(index);
-          if (!isTimerRunning) setIsTimerRunning(true);
-        }}
-        onDragUpdate={(row: number | null, col: number | null) => {
-          setDragOverCell((prev) => {
-            if (row === null || col === null) return prev ? null : prev;
-            const isEmpty = gridStateRef.current[row]?.[col] === null;
-            if (!isEmpty) return prev ? null : prev;
-            if (prev?.row === row && prev?.col === col) return prev;
-            return { row, col };
-          });
-        }}
+        gridRef={gridRef}
+        hoverCell={hoverCell}
+        occupied={occupied}
+        onDrop={stableHandleDrop}
+        onPickup={stableHandleBlockPickup}
       />
     )
   ));
 
   return (
+    <GestureHandlerRootView style={styles.gestureRoot}>
     <GameSpotlightTourProvider
       ref={tourRef}
       steps={tourSteps}
@@ -1835,12 +1652,8 @@ export default function GameLayout() {
           <Animated.Text
             style={[
               styles.rectangleValue,
-              {
-                color: '#C35DD9',
-                position: 'absolute',
-                opacity: noHintsAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0] }),
-                transform: [{ scale: noHintsAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 0.98] }) }],
-              },
+              { color: '#C35DD9', position: 'absolute' },
+              hintsCountStyle,
             ]}
           >
             {hints}
@@ -1848,12 +1661,8 @@ export default function GameLayout() {
           <Animated.Text
             style={[
               styles.rectangleValue,
-              {
-                color: '#C35DD9',
-                position: 'absolute',
-                opacity: noHintsAnim,
-                transform: [{ scale: noHintsAnim.interpolate({ inputRange: [0, 1], outputRange: [0.98, 1] }) }],
-              },
+              { color: '#C35DD9', position: 'absolute' },
+              noHintsFaceStyle,
             ]}
           >
             (¬_¬)
@@ -1892,17 +1701,27 @@ export default function GameLayout() {
       <View
         ref={boardRef}
         collapsable={false}
-        onLayout={() => {
-          boardRef.current?.measureInWindow((x, y, width, height) => {
-            setBoardLayout({ x, y, width, height });
-          });
-        }}
         style={[
           styles.board,
           { backgroundColor: theme === 'dark' ? 'rgba(25,25,91,0.7)' : '#E4EBF0' },
         ]}
       >
-        {grid}
+        <SkiaGameBoard
+          variant="classic"
+          geometry={BOARD_GEOMETRY}
+          gridRef={gridRef}
+          grid={gridState}
+          gradients={colorGradients}
+          bulldogs={bulldogPositions}
+          isDark={theme === 'dark'}
+          colorBlindEnabled={colorBlindEnabled}
+          colorBlindMode={colorBlindMode}
+          hoverCell={hoverCell}
+          scoredCells={scoredCells}
+          hint={activeHint}
+          pickTarget={interactionMode === 'pick' ? pickTargetCell : null}
+          onCellPress={interactionMode === 'pick' ? handleBoardCellPress : undefined}
+        />
         {feedback && (
           <View pointerEvents="none" style={styles.feedbackContainer}>
             <Text style={[styles.feedbackText, { color: feedback.color }]}>
@@ -2658,11 +2477,13 @@ export default function GameLayout() {
       </>
     )}
     </GameSpotlightTourProvider>
+    </GestureHandlerRootView>
   );
 }
 
 
 const styles = StyleSheet.create({
+  gestureRoot: { flex: 1 },
   container: { flex: 1, alignItems: 'center' },
   background: {
     ...StyleSheet.absoluteFillObject,

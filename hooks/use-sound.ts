@@ -129,7 +129,12 @@ export function useSound() {
         playWebTone(key);
         return;
       }
-      void playNativeSound(key);
+      // seekTo/play are synchronous native calls (~5-30 ms on the JS thread). Run them on the
+      // next macrotask so a state update made in the same handler (placing a block, showing the
+      // score) renders first instead of waiting behind the audio call.
+      setTimeout(() => {
+        void playNativeSound(key);
+      }, 0);
     },
     [playNativeSound, playWebTone, soundEnabled],
   );

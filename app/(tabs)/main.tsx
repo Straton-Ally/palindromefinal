@@ -7,7 +7,6 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
   InteractionManager,
   Platform,
   Pressable,
@@ -17,8 +16,38 @@ import {
   useWindowDimensions,
   View,
 } from 'react-native';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  interpolate,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+  type SharedValue,
+} from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { SpotlightTourProvider, type TourState, type TourStep } from 'react-native-spotlight-tour';
+import { SpotlightTourProvider, type TourState, type TourStep } from '@/components/tour/SpotlightTour';
+
+// Matches the old Animated.timing default easing.
+const LOOP_EASING = Easing.inOut(Easing.ease);
+
+/** Loops a shared value 0 → 1 → 0 forever on the UI thread. */
+function useLoopingValue(halfDurationMs: number): SharedValue<number> {
+  const value = useSharedValue(0);
+  useEffect(() => {
+    value.value = withRepeat(
+      withSequence(
+        withTiming(1, { duration: halfDurationMs, easing: LOOP_EASING }),
+        withTiming(0, { duration: halfDurationMs, easing: LOOP_EASING }),
+      ),
+      -1,
+    );
+    return () => cancelAnimation(value);
+  }, [halfDurationMs, value]);
+  return value;
+}
 
 const TOUR_SEEN_KEY = 'palindrome_ui_tour_v1_seen';
 
@@ -155,7 +184,8 @@ function MainTourSpotSync(props: {
   const { current, status, changeSpot } = props.tour ?? {};
   const { scrollToTile, topbarRef, singleRef, multiRef, practiceRef, settingsRef } = props;
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const yOffset = props.topInset;
+  // Spots are passed in window coordinates; the tour provider converts them to its own space.
+  const yOffset = 0;
 
   useEffect(() => {
     if (status !== 'running') return;
@@ -238,22 +268,11 @@ export default function MainScreen() {
   const settingsRef = useRef<any>(null);
 
   const isCompact = width < 420;
-  const float = useRef(new Animated.Value(0)).current;
+  const float = useLoopingValue(2400);
 
   const backgroundColors = useMemo(() => {
     return isDark ? (['#000017', '#000074'] as const) : (['#FFFFFF', '#E9EFFF'] as const);
   }, [isDark]);
-
-  useEffect(() => {
-    const anim = Animated.loop(
-      Animated.sequence([
-        Animated.timing(float, { toValue: 1, duration: 2400, useNativeDriver: true }),
-        Animated.timing(float, { toValue: 0, duration: 2400, useNativeDriver: true }),
-      ]),
-    );
-    anim.start();
-    return () => anim.stop();
-  }, [float]);
 
   const scrollRef = useRef<ScrollView>(null);
   const tileGridYRef = useRef<number>(0);
@@ -389,9 +408,9 @@ export default function MainScreen() {
     router.push('/notifications');
   }, [router]);
 
-  const orbAOffset = float.interpolate({ inputRange: [0, 1], outputRange: [0, -14] });
-  const orbBOffset = float.interpolate({ inputRange: [0, 1], outputRange: [0, -10] });
-  const orbCOffset = float.interpolate({ inputRange: [0, 1], outputRange: [0, -18] });
+  const orbAStyle = useAnimatedStyle(() => ({ transform: [{ translateY: interpolate(float.value, [0, 1], [0, -14]) }] }));
+  const orbBStyle = useAnimatedStyle(() => ({ transform: [{ translateY: interpolate(float.value, [0, 1], [0, -10]) }] }));
+  const orbCStyle = useAnimatedStyle(() => ({ transform: [{ translateY: interpolate(float.value, [0, 1], [0, -18]) }] }));
 
   return (
     <SpotlightTourProvider
@@ -418,13 +437,13 @@ export default function MainScreen() {
           />
           <LinearGradient colors={backgroundColors} style={{ flex: 1 }}>
           <View pointerEvents="none" style={StyleSheet.absoluteFill}>
-            <Animated.View style={[styles.orb, styles.orbA, { transform: [{ translateY: orbAOffset }] }]}>
+            <Animated.View style={[styles.orb, styles.orbA, orbAStyle]}>
               <LinearGradient colors={['rgba(142,217,252,0.55)', 'rgba(60,141,234,0.0)']} style={styles.orbFill} />
             </Animated.View>
-            <Animated.View style={[styles.orb, styles.orbB, { transform: [{ translateY: orbBOffset }] }]}>
+            <Animated.View style={[styles.orb, styles.orbB, orbBStyle]}>
               <LinearGradient colors={['rgba(255,238,96,0.55)', 'rgba(255,164,11,0.0)']} style={styles.orbFill} />
             </Animated.View>
-            <Animated.View style={[styles.orb, styles.orbC, { transform: [{ translateY: orbCOffset }] }]}>
+            <Animated.View style={[styles.orb, styles.orbC, orbCStyle]}>
               <LinearGradient colors={['rgba(195,93,217,0.42)', 'rgba(195,93,217,0.0)']} style={styles.orbFill} />
             </Animated.View>
           </View>
@@ -635,20 +654,10 @@ const MenuTile = React.forwardRef<any, {
   colors: readonly [string, string];
   onPress: () => void;
 }>((props, ref) => {
-  const sparkle = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const a = Animated.loop(
-      Animated.sequence([
-        Animated.timing(sparkle, { toValue: 1, duration: 2200, useNativeDriver: true }),
-        Animated.timing(sparkle, { toValue: 0, duration: 2200, useNativeDriver: true }),
-      ]),
-    );
-    a.start();
-    return () => a.stop();
-  }, [sparkle]);
-
-  const sparkleTranslate = sparkle.interpolate({ inputRange: [0, 1], outputRange: [0, -10] });
+  const sparkle = useLoopingValue(2200);
+  const sparkleStyle = useAnimatedStyle(() => ({
+    transform: [{ translateY: interpolate(sparkle.value, [0, 1], [0, -10]) }],
+  }));
 
   return (
     <Pressable
@@ -670,10 +679,8 @@ const MenuTile = React.forwardRef<any, {
           pointerEvents="none"
           style={[
             styles.spark,
-            {
-              transform: [{ translateY: sparkleTranslate }],
-              opacity: 0.55,
-            },
+            { opacity: 0.55 },
+            sparkleStyle,
           ]}
         >
           <LinearGradient

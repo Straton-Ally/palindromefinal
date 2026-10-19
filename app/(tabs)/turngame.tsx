@@ -25,24 +25,26 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Animated,
   BackHandler,
   Image,
-  PanResponder,
   Pressable,
   StyleSheet,
   Text,
   useWindowDimensions,
   View,
 } from 'react-native';
+import { GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import Animated, {
+  cancelAnimation,
+  useAnimatedRef,
+  useSharedValue,
+  withTiming,
+  type AnimatedRef,
+  type SharedValue,
+} from 'react-native-reanimated';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-
-const COLOR_BLIND_TOKENS: Record<ColorBlindMode, readonly string[]> = {
-  symbols: ['●', '▲', '■', '◆', '★'],
-  emojis: ['🍓', '🥑', '🫐', '🖤', '🍋'],
-  cards: ['♥', '♣', '♦', '♠', '★'],
-  letters: ['A', 'B', 'C', 'D', 'E'],
-} as const;
+import { NO_CELL, useBoardDrag, useBoardSharedState, type BoardGeometry } from '@/components/game/boardDrag';
+import { COLOR_BLIND_TOKENS, SkiaGameBoard } from '@/components/game/SkiaGameBoard';
 
 function formatTime(ms: number): string {
   const totalSec = Math.max(0, Math.ceil(ms / 1000));
@@ -87,8 +89,6 @@ function getScoringFeedbackForLength(length: number) {
   if (length === 5) return { text: 'GREAT!', color: '#60A5FA' };
   return { text: 'GOOD!', color: '#4ADE80' };
 }
-
-type BoardLayout = { x: number; y: number; width: number; height: number };
 
 // ── Player Card ─────────────────────────────────────────
 function PlayerCard({
@@ -165,17 +165,17 @@ function PlayerCard({
   );
 }
 
-// ── Draggable Block (PanResponder) ──────────────────────
-function DraggableBlock({
+// ── Draggable Block (Gesture Handler + Reanimated, UI thread) ──
+const DraggableBlock = React.memo(function DraggableBlock({
   colorIndex,
   gradient,
   count,
   blockSize,
-  cellSize,
-  boardLayout,
-  measureBoardLayout,
+  geometry,
+  gridRef,
+  hoverCell,
+  occupied,
   onPickup,
-  onDragUpdate,
   onDrop,
   disabled,
   colorBlindEnabled,
@@ -185,123 +185,67 @@ function DraggableBlock({
   gradient: readonly [string, string];
   count: number;
   blockSize: number;
-  cellSize: number;
-  boardLayout: BoardLayout | null;
-  measureBoardLayout: () => Promise<BoardLayout | null>;
+  geometry: BoardGeometry;
+  gridRef: AnimatedRef<View>;
+  hoverCell: SharedValue<number>;
+  occupied: SharedValue<number[]>;
   onPickup: () => void;
-  onDragUpdate: (cell: { row: number; col: number } | null) => void;
   onDrop: (row: number, col: number, colorIndex: number) => void;
   disabled: boolean;
   colorBlindEnabled: boolean;
   colorBlindMode: ColorBlindMode;
 }) {
-  const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
   const [isDragging, setIsDragging] = useState(false);
-  const lastCellRef = useRef<{ row: number; col: number } | null>(null);
-  const dragOffsetY = 50;
-
-  const latest = useRef({ boardLayout, count, disabled, measureBoardLayout, onDragUpdate, onDrop, onPickup });
-  useEffect(() => {
-    latest.current = { boardLayout, count, disabled, measureBoardLayout, onDragUpdate, onDrop, onPickup };
-  }, [boardLayout, count, disabled, measureBoardLayout, onDragUpdate, onDrop, onPickup]);
-
-  const cellMargin = 2;
-  const stepXY = cellSize + cellMargin * 2;
-  const boardPadding = 10;
-
-  const getCellFromPoint = useCallback(
-    (touchX: number, touchY: number, layout: BoardLayout) => {
-      const innerWidth = Math.max(1, layout.width - boardPadding * 2);
-      const innerHeight = Math.max(1, layout.height - boardPadding * 2);
-      const gridPixelW = GRID_SIZE * stepXY;
-      const gridPixelH = GRID_SIZE * stepXY;
-      const extraX = Math.max(0, (innerWidth - gridPixelW) / 2);
-      const extraY = Math.max(0, (innerHeight - gridPixelH) / 2);
-
-      const originX = layout.x + boardPadding + extraX + cellMargin;
-      const originY = layout.y + boardPadding + extraY + cellMargin;
-
-      const localX = touchX - originX;
-      const localY = touchY - originY - dragOffsetY;
-      const col = Math.floor(localX / stepXY);
-      const row = Math.floor(localY / stepXY);
-
-      if (row < 0 || row >= GRID_SIZE || col < 0 || col >= GRID_SIZE) return null;
-      return { row, col };
-    },
-    [stepXY]
-  );
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => !latest.current.disabled && latest.current.count > 0,
-      onMoveShouldSetPanResponder: () => !latest.current.disabled && latest.current.count > 0,
-      onPanResponderGrant: () => {
-        if (latest.current.disabled || latest.current.count <= 0) return;
-        setIsDragging(true);
-        latest.current.onPickup();
-        void latest.current.measureBoardLayout();
-      },
-      onPanResponderMove: (evt, gesture) => {
-        pan.setValue({ x: gesture.dx, y: gesture.dy });
-        const layout = latest.current.boardLayout;
-        if (!layout) return;
-        const cell = getCellFromPoint(evt.nativeEvent.pageX, evt.nativeEvent.pageY, layout);
-        const lastCell = lastCellRef.current;
-        if (cell?.row !== lastCell?.row || cell?.col !== lastCell?.col) {
-          lastCellRef.current = cell;
-          latest.current.onDragUpdate(cell);
-        }
-      },
-      onPanResponderRelease: (evt) => {
-        const layout = latest.current.boardLayout;
-        if (layout) {
-          const cell = getCellFromPoint(evt.nativeEvent.pageX, evt.nativeEvent.pageY, layout);
-          if (cell) {
-            latest.current.onDrop(cell.row, cell.col, colorIndex);
-          }
-        }
-        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
-        setIsDragging(false);
-        lastCellRef.current = null;
-        latest.current.onDragUpdate(null);
-      },
-      onPanResponderTerminate: () => {
-        Animated.spring(pan, { toValue: { x: 0, y: 0 }, useNativeDriver: true }).start();
-        setIsDragging(false);
-        lastCellRef.current = null;
-        latest.current.onDragUpdate(null);
-      },
-    })
-  ).current;
-
+  const blockRef = useAnimatedRef<View>();
   const canDrag = !disabled && count > 0;
+
+  const { gesture, translateStyle } = useBoardDrag({
+    enabled: canDrag,
+    geometry,
+    gridRef,
+    blockRef,
+    hoverCell,
+    occupied,
+    blockSize,
+    hoverOnlyEmpty: false,
+    onPickup,
+    onDrop: (row, col) => onDrop(row, col, colorIndex),
+    onDraggingChange: setIsDragging,
+  });
+
   const token = colorBlindEnabled ? COLOR_BLIND_TOKENS[colorBlindMode][colorIndex] ?? '?' : null;
 
   return (
-    <Animated.View
-      {...panResponder.panHandlers}
-      style={{
-        width: blockSize,
-        height: blockSize,
-        opacity: canDrag ? 1 : 0.35,
-        transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale: isDragging ? 1.1 : 1 }],
-        zIndex: isDragging ? 999 : 1,
-      }}
-    >
-      <LinearGradient colors={[gradient[0], gradient[1]]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.draggableGradient}>
-        {token ? (
-          <>
-            <Text style={styles.draggableTokenCount}>{count}</Text>
-            <Text style={styles.draggableTokenSymbol}>{token}</Text>
-          </>
-        ) : (
-          <Text style={styles.draggableCount}>{count}</Text>
-        )}
-      </LinearGradient>
-    </Animated.View>
+    <GestureDetector gesture={gesture}>
+      <Animated.View
+        ref={blockRef}
+        collapsable={false}
+        style={[
+          {
+            width: blockSize,
+            height: blockSize,
+            opacity: canDrag ? 1 : 0.35,
+            zIndex: isDragging ? 999 : 1,
+          },
+          translateStyle,
+        ]}
+      >
+        <View style={styles.draggableScale}>
+          <LinearGradient colors={[gradient[0], gradient[1]]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.draggableGradient}>
+            {token ? (
+              <>
+                <Text style={styles.draggableTokenCount}>{count}</Text>
+                <Text style={styles.draggableTokenSymbol}>{token}</Text>
+              </>
+            ) : (
+              <Text style={styles.draggableCount}>{count}</Text>
+            )}
+          </LinearGradient>
+        </View>
+      </Animated.View>
+    </GestureDetector>
   );
-}
+});
 
 // ══════════════════════════════════════════════════════════
 // MAIN COMPONENT
@@ -368,7 +312,6 @@ export default function TurnGameNative() {
   const turnStartedLocal = useRef<number>(Date.now());
   const lastMoveTime = useRef<number>(Date.now());
 
-  const [dragOverCell, setDragOverCell] = useState<{ row: number; col: number } | null>(null);
   const [pendingPlacedCell, setPendingPlacedCell] = useState<{ row: number; col: number; colorIndex: number } | null>(null);
   const [feedback, setFeedback] = useState<{ text: string; color: string; id: number } | null>(null);
   const [scoredCells, setScoredCells] = useState<string[]>([]);
@@ -381,7 +324,7 @@ export default function TurnGameNative() {
   const timeoutSubmittingRef = useRef(false);
   const previousBoardRef = useRef<(number | null)[][] | null>(null);
   const opponentShimmerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const opponentShimmerProgress = useRef(new Animated.Value(0)).current;
+  const opponentShimmerProgress = useSharedValue(0);
   const [opponentChangedCells, setOpponentChangedCells] = useState<string[]>([]);
   const [turnNotice, setTurnNotice] = useState<string | null>(null);
   const turnNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -392,9 +335,6 @@ export default function TurnGameNative() {
     () => (customGameColors ?? [...DEFAULT_GAME_GRADIENTS]) as readonly [string, string][],
     [customGameColors]
   );
-  const center = Math.floor(gridSize / 2);
-  const word = 'PALINDROME®';
-  const halfWord = Math.floor(word.length / 2);
 
   // Derived state
   const isPlayer1 = turnState ? userId === turnState.player1_user_id : false;
@@ -406,22 +346,31 @@ export default function TurnGameNative() {
   );
   const myScore = turnState ? (isPlayer1 ? turnState.player1_score : turnState.player2_score) : 0;
   const opScore = turnState ? (isPlayer1 ? turnState.player2_score : turnState.player1_score) : 0;
-  const board: (number | null)[][] =
-    turnState?.board?.length === gridSize
-      ? turnState.board
-      : Array.from({ length: gridSize }, () => Array(gridSize).fill(null));
+  const board: (number | null)[][] = useMemo(
+    () =>
+      turnState?.board?.length === gridSize
+        ? turnState.board
+        : Array.from({ length: gridSize }, () => Array(gridSize).fill(null)),
+    [gridSize, turnState?.board]
+  );
+  // What the board shows: server board plus the optimistic block placed this turn.
+  const displayBoard = useMemo(() => {
+    if (!pendingPlacedCell) return board;
+    const next = board.map((r) => [...r]);
+    if (next[pendingPlacedCell.row]) next[pendingPlacedCell.row][pendingPlacedCell.col] = pendingPlacedCell.colorIndex;
+    return next;
+  }, [board, pendingPlacedCell]);
+  const gridRef = useAnimatedRef<View>();
+  const { hoverCell, occupied } = useBoardSharedState(displayBoard);
   const bulldogPositions = useMemo(() => turnState?.bulldog_positions ?? [], [turnState]);
 
   const showOpponentMoveShimmer = useCallback((cells: string[]) => {
     if (cells.length === 0) return;
     if (opponentShimmerTimerRef.current) clearTimeout(opponentShimmerTimerRef.current);
     setOpponentChangedCells(cells);
-    opponentShimmerProgress.setValue(0);
-    Animated.timing(opponentShimmerProgress, {
-      toValue: 1,
-      duration: 1100,
-      useNativeDriver: true,
-    }).start();
+    cancelAnimation(opponentShimmerProgress);
+    opponentShimmerProgress.value = 0;
+    opponentShimmerProgress.value = withTiming(1, { duration: 1100 });
     opponentShimmerTimerRef.current = setTimeout(() => {
       setOpponentChangedCells([]);
       opponentShimmerTimerRef.current = null;
@@ -504,24 +453,10 @@ export default function TurnGameNative() {
   const cellSize = Math.floor((boardSize - 20) / gridSize) - 4;
   const blockSize = Math.min(58, Math.floor((windowWidth - 44) / 5) - 6);
 
-  // Board layout for drop hit-testing
-  const boardRef = useRef<View | null>(null);
-  const [boardLayout, setBoardLayout] = useState<BoardLayout | null>(null);
-
-  const measureBoardLayout = useCallback((): Promise<BoardLayout | null> => {
-    return new Promise((resolve) => {
-      const node = boardRef.current as any;
-      if (!node?.measureInWindow) {
-        resolve(null);
-        return;
-      }
-      node.measureInWindow((x: number, y: number, width: number, height: number) => {
-        const layout = { x, y, width, height };
-        setBoardLayout(layout);
-        resolve(layout);
-      });
-    });
-  }, []);
+  const boardGeometry = useMemo<BoardGeometry>(
+    () => ({ gridSize, cellWidth: cellSize, cellHeight: cellSize, cellMargin: 2, cellRadius: 6 }),
+    [cellSize, gridSize]
+  );
 
   // ── Auth ──
   useEffect(() => {
@@ -738,7 +673,7 @@ export default function TurnGameNative() {
   // ── Handle drop ──
   const handleDrop = useCallback(
     async (row: number, col: number, colorIndex: number) => {
-      setDragOverCell(null);
+      hoverCell.value = NO_CELL;
       if (!isMyTurn || isGameOver || !matchId || !userId || !turnState || scoringInProgressRef.current) {
         playErrorSound();
         triggerHaptic('error');
@@ -824,6 +759,7 @@ export default function TurnGameNative() {
     [
       board,
       checkAndScore,
+      hoverCell,
       isGameOver,
       isMyTurn,
       matchId,
@@ -841,6 +777,19 @@ export default function TurnGameNative() {
       waitForTurnScoringFrame,
     ]
   );
+
+  // Stable callbacks so the memoized DraggableBlocks don't re-render on every clock tick.
+  const handleDropRef = useRef(handleDrop);
+  handleDropRef.current = handleDrop;
+  const stableHandleDrop = useCallback((row: number, col: number, colorIndex: number) => {
+    void handleDropRef.current(row, col, colorIndex);
+  }, []);
+  const handleBlockPickupRef = useRef<() => void>(() => {});
+  handleBlockPickupRef.current = () => {
+    playPickupSound();
+    triggerHaptic('light');
+  };
+  const stableHandleBlockPickup = useCallback(() => handleBlockPickupRef.current(), []);
 
   const handleForfeit = useCallback(async () => {
     if (!matchId || !userId) return;
@@ -867,6 +816,7 @@ export default function TurnGameNative() {
   }
 
   return (
+    <GestureHandlerRootView style={styles.gestureRoot}>
     <LinearGradient
       colors={isDark ? ['#00000f', '#00004a', '#000074'] : ['#eef2ff', '#f5f0ff', '#ffffff']}
       style={styles.root}
@@ -910,9 +860,6 @@ export default function TurnGameNative() {
         {/* Board */}
         <View style={styles.boardWrapper}>
           <View
-            ref={boardRef}
-            collapsable={false}
-            onLayout={() => void measureBoardLayout()}
             style={[
               styles.board,
               {
@@ -923,126 +870,22 @@ export default function TurnGameNative() {
               },
             ]}
           >
-            {Array.from({ length: gridSize }, (_, row) => (
-              <View key={row} style={styles.boardRow}>
-                {Array.from({ length: gridSize }, (_, col) => {
-                  const isBulldog = bulldogPositions.some((p) => p.row === row && p.col === col);
-                  let letter: string | null = null;
-                  if (row === center && col >= center - halfWord && col < center - halfWord + word.length) {
-                    letter = word[col - (center - halfWord)];
-                  }
-                  if (col === center && row >= center - halfWord && row < center - halfWord + word.length) {
-                    letter = word[row - (center - halfWord)];
-                  }
-                  const cellColor = pendingPlacedCell?.row === row && pendingPlacedCell.col === col
-                    ? pendingPlacedCell.colorIndex
-                    : board[row]?.[col] ?? null;
-                  const isHovered = dragOverCell?.row === row && dragOverCell?.col === col;
-                  const isScored = scoredCells.includes(`${row},${col}`);
-                  const hasOpponentShimmer = opponentChangedCells.includes(`${row},${col}`);
-                  const scoreIndex = isScored ? scoredCells.indexOf(`${row},${col}`) : 0;
-                  const scoredScale = isScored ? (scoredCellsRun % 2 === 0 ? 1.14 : 1.1) : 1;
-                  const shimmerTranslateX = opponentShimmerProgress.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [-cellSize, cellSize],
-                  });
-
-                  return (
-                    <View
-                      key={col}
-                      style={[
-                        styles.boardCell,
-                        {
-                          width: cellSize,
-                          height: cellSize,
-                          backgroundColor: isDark ? 'rgba(25,25,91,0.7)' : '#FFFFFF',
-                          borderColor: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(204,218,228,0.4)',
-                        },
-                        isHovered && {
-                          backgroundColor: isDark ? 'rgba(100,200,255,0.4)' : 'rgba(100,200,255,0.3)',
-                          borderColor: '#4A9EFF',
-                          borderWidth: 2,
-                        },
-                        isScored && {
-                          borderColor: '#FACC15',
-                          borderWidth: 2,
-                          shadowColor: '#FACC15',
-                          shadowOffset: { width: 0, height: 0 },
-                          shadowOpacity: 0.9,
-                          shadowRadius: 10,
-                          elevation: 4,
-                        },
-                      ]}
-                    >
-                      {cellColor !== null && (
-                        <LinearGradient
-                          colors={[colorGradients[cellColor][0], colorGradients[cellColor][1]]}
-                          start={{ x: 0, y: 0 }}
-                          end={{ x: 1, y: 1 }}
-                          style={[
-                            StyleSheet.absoluteFill,
-                            {
-                              borderRadius: 6,
-                              transform: [{ scale: scoredScale }],
-                              opacity: isScored && scoreIndex % 2 === 1 ? 0.96 : 1,
-                            },
-                          ]}
-                        />
-                      )}
-                      {hasOpponentShimmer && (
-                        <Animated.View
-                          pointerEvents="none"
-                          style={[
-                            styles.opponentShimmer,
-                            {
-                              width: Math.max(12, cellSize * 0.45),
-                              transform: [{ translateX: shimmerTranslateX }, { rotate: '18deg' }],
-                            },
-                          ]}
-                        />
-                      )}
-                      {isBulldog && !letter && cellColor !== null && (
-                        <Image
-                          source={require('../../assets/images/bulldog.png')}
-                          style={{
-                            position: 'absolute',
-                            width: Math.max(12, cellSize - 10),
-                            height: Math.max(12, cellSize - 10),
-                            resizeMode: 'contain',
-                            opacity: 0.72,
-                            zIndex: 2,
-                          }}
-                        />
-                      )}
-                      {cellColor !== null && colorBlindEnabled && !letter && (
-                        <Text style={[styles.cellToken, { fontSize: cellSize > 26 ? 18 : 14 }]}>
-                          {COLOR_BLIND_TOKENS[colorBlindMode][cellColor]}
-                        </Text>
-                      )}
-                      {isBulldog && !letter && cellColor === null && (
-                        <Image
-                          source={require('../../assets/images/bulldog.png')}
-                          style={{ width: cellSize - 8, height: cellSize - 8, resizeMode: 'contain' }}
-                        />
-                      )}
-                      {letter && (
-                        <Text
-                          style={[
-                            styles.cellLetter,
-                            {
-                              color: cellColor !== null ? '#FFFFFF' : isDark ? '#FFFFFF' : '#0F172A',
-                              fontSize: cellSize > 26 ? 14 : 11,
-                            },
-                          ]}
-                        >
-                          {letter}
-                        </Text>
-                      )}
-                    </View>
-                  );
-                })}
-              </View>
-            ))}
+            <SkiaGameBoard
+              variant="turn"
+              geometry={boardGeometry}
+              gridRef={gridRef}
+              grid={displayBoard}
+              gradients={colorGradients}
+              bulldogs={bulldogPositions}
+              isDark={isDark}
+              colorBlindEnabled={colorBlindEnabled}
+              colorBlindMode={colorBlindMode}
+              hoverCell={hoverCell}
+              scoredCells={scoredCells}
+              scoredRun={scoredCellsRun}
+              shimmerCells={opponentChangedCells}
+              shimmerProgress={opponentShimmerProgress}
+            />
 
             {/* Feedback overlay */}
             {feedback && (
@@ -1076,15 +919,12 @@ export default function TurnGameNative() {
               gradient={g}
               count={myBlocks[i] ?? 0}
               blockSize={blockSize}
-              cellSize={cellSize}
-              boardLayout={boardLayout}
-              measureBoardLayout={measureBoardLayout}
-              onPickup={() => {
-                playPickupSound();
-                triggerHaptic('light');
-              }}
-              onDragUpdate={setDragOverCell}
-              onDrop={handleDrop}
+              geometry={boardGeometry}
+              gridRef={gridRef}
+              hoverCell={hoverCell}
+              occupied={occupied}
+              onPickup={stableHandleBlockPickup}
+              onDrop={stableHandleDrop}
               disabled={!isMyTurn || isGameOver}
               colorBlindEnabled={colorBlindEnabled}
               colorBlindMode={colorBlindMode}
@@ -1258,6 +1098,7 @@ export default function TurnGameNative() {
         )}
       </SafeAreaView>
     </LinearGradient>
+    </GestureHandlerRootView>
   );
 }
 
@@ -1436,6 +1277,8 @@ const styles = StyleSheet.create({
     marginHorizontal: 12,
     borderRadius: 16,
   },
+  gestureRoot: { flex: 1 },
+  draggableScale: { flex: 1 },
   draggableGradient: {
     flex: 1,
     borderRadius: 10,
