@@ -1,60 +1,70 @@
 import { useEffect, useRef, useState } from 'react';
 
-export default function SplashScreen({ onReady }) {
-  const [imagesLoaded, setImagesLoaded] = useState({ bg: false, logo: false });
-  const readyCalledRef = useRef(false);
+// Splash stays at least this long so it never flashes; longer if the app is still loading.
+const MIN_VISIBLE_MS = 1800;
+const EXIT_MS = 350;
 
-  const handleImageLoad = (imageKey) => {
-    console.log(`Image loaded: ${imageKey}`);
-    setImagesLoaded(prev => {
-      const newState = { ...prev, [imageKey]: true };
-      if (newState.bg && newState.logo && onReady && !readyCalledRef.current) {
-        readyCalledRef.current = true;
-        setTimeout(() => onReady(), 300);
-      }
-      return newState;
-    });
-  };
-
-  const allLoaded = imagesLoaded.bg && imagesLoaded.logo;
+/**
+ * Animated splash (CSS): bulldog and PALINDROME® fade/scale in, a light shimmer sweeps across
+ * both (masked to the bulldog's shape and clipped to the title text), then the splash fades out
+ * once the app is ready (`ready`) and calls `onFinish`.
+ */
+export default function SplashScreen({ ready = false, onFinish }) {
+  const [exiting, setExiting] = useState(false);
+  const startedAt = useRef(Date.now());
+  const finishing = useRef(false);
 
   useEffect(() => {
+    if (!ready || finishing.current) return;
+    const wait = Math.max(0, MIN_VISIBLE_MS - (Date.now() - startedAt.current));
     const timer = setTimeout(() => {
-      console.log('Fallback timer triggered');
-      setImagesLoaded({ bg: true, logo: true });
-      if (onReady && !readyCalledRef.current) {
-        readyCalledRef.current = true;
-        setTimeout(() => onReady(), 300);
-      }
-    }, 2000);
+      finishing.current = true;
+      setExiting(true);
+    }, wait);
     return () => clearTimeout(timer);
-  }, [onReady]);
+  }, [ready]);
+
+  useEffect(() => {
+    if (!exiting) return;
+    const timer = setTimeout(() => onFinish && onFinish(), EXIT_MS);
+    return () => clearTimeout(timer);
+  }, [exiting, onFinish]);
 
   return (
-    <div style={styles.container}>
-      <img
-        src="/images/bg.png"
-        style={{ ...styles.background, opacity: allLoaded ? 1 : 0 }}
-        onLoad={() => handleImageLoad('bg')}
-        onError={() => handleImageLoad('bg')}
-        alt="background"
-      />
+    <div style={{ ...styles.container, opacity: exiting ? 0 : 1 }}>
+      <style>{`
+        @keyframes splashIntro {
+          from { opacity: 0; transform: scale(0.9); }
+          to { opacity: 1; transform: scale(1); }
+        }
+        @keyframes splashSubtitle {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes splashShimmer {
+          from { background-position: 150% 0; }
+          to { background-position: -50% 0; }
+        }
+      `}</style>
 
-      <div style={{ ...styles.contentContainer, opacity: allLoaded ? 1 : 0 }}>
-        <img
-          src="/images/bulldog.png"
-          style={styles.logo}
-          onLoad={() => handleImageLoad('logo')}
-          onError={() => handleImageLoad('logo')}
-          alt="Palindrome Logo"
-        />
+      <img src="/images/bg.png" style={styles.background} alt="" />
 
-        <h1 style={styles.title}>PALINDROME®</h1>
-        <p style={styles.subtitle}>BY GAMMA GAMES</p>
+      <div style={styles.contentContainer}>
+        <div style={styles.intro}>
+          <div style={styles.logoWrap}>
+            <img src="/images/bulldog.png" style={styles.logo} alt="Palindrome Logo" />
+            <div style={styles.logoShimmer} />
+          </div>
+          <h1 style={styles.title}>PALINDROME®</h1>
+        </div>
+        <p style={styles.subtitle}>BY GAMMA GAMES BY OXFORD</p>
       </div>
     </div>
   );
 }
+
+const SHIMMER_BAND =
+  'linear-gradient(110deg, rgba(255,255,255,0) 40%, rgba(255,255,255,0.75) 50%, rgba(255,255,255,0) 60%)';
 
 const styles = {
   container: {
@@ -68,6 +78,7 @@ const styles = {
     overflow: 'hidden',
     margin: 0,
     padding: 0,
+    transition: `opacity ${EXIT_MS}ms ease-in`,
   },
 
   background: {
@@ -77,16 +88,6 @@ const styles = {
     width: '100%',
     height: '100%',
     objectFit: 'cover',
-    transition: 'opacity 0.3s ease-in',
-  },
-
-  backgroundFallback: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    width: '100%',
-    height: '100%',
-    background: 'linear-gradient(135deg, #000428 0%, #004e92 100%)',
   },
 
   contentContainer: {
@@ -96,37 +97,52 @@ const styles = {
     alignItems: 'center',
     justifyContent: 'center',
     zIndex: 10,
-    transition: 'opacity 0.3s ease-in',
+  },
+
+  intro: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    animation: 'splashIntro 550ms cubic-bezier(0.215, 0.61, 0.355, 1) both',
+  },
+
+  logoWrap: {
+    position: 'relative',
+    width: '200px',
+    height: '200px',
+    marginBottom: '60px',
   },
 
   logo: {
     width: '200px',
     height: '200px',
-    marginBottom: '60px',
     objectFit: 'contain',
+    display: 'block',
   },
 
-  logoFallback: {
-    width: '200px',
-    height: '200px',
-    marginBottom: '60px',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.1)',
-    borderRadius: '50%',
+  // Light band masked to the bulldog's own pixels.
+  logoShimmer: {
+    position: 'absolute',
+    inset: 0,
+    backgroundImage: SHIMMER_BAND,
+    backgroundSize: '250% 100%',
+    backgroundRepeat: 'no-repeat',
+    WebkitMaskImage: 'url(/images/bulldog.png)',
+    maskImage: 'url(/images/bulldog.png)',
+    WebkitMaskSize: 'contain',
+    maskSize: 'contain',
+    WebkitMaskRepeat: 'no-repeat',
+    maskRepeat: 'no-repeat',
+    WebkitMaskPosition: 'center',
+    maskPosition: 'center',
+    animation: 'splashShimmer 1100ms ease-in-out 330ms infinite',
+    pointerEvents: 'none',
   },
 
-  logoPlaceholder: {
-    color: '#0060FF',
-    fontSize: '16px',
-    fontWeight: 'bold',
-  },
-
+  // Blue title with the same light band clipped to the text.
   title: {
     margin: 0,
     textAlign: 'center',
-    color: '#0060FF',
     fontSize: 'clamp(28px, 7vw, 48px)',
     fontWeight: '700',
     letterSpacing: '6px',
@@ -137,16 +153,26 @@ const styles = {
     maxWidth: '95vw',
     overflow: 'hidden',
     textOverflow: 'clip',
+    color: 'transparent',
+    backgroundImage: `${SHIMMER_BAND}, linear-gradient(#0060FF, #0060FF)`,
+    backgroundSize: '250% 100%, 100% 100%',
+    backgroundRepeat: 'no-repeat',
+    WebkitBackgroundClip: 'text',
+    backgroundClip: 'text',
+    animation: 'splashShimmer 1100ms ease-in-out 330ms infinite',
   },
 
   subtitle: {
     margin: 0,
     textAlign: 'center',
     color: '#FFFFFF',
-    fontSize: '14px',
+    fontSize: 'clamp(10px, 3.4vw, 14px)',
     fontWeight: '400',
-    letterSpacing: '4px',
+    letterSpacing: 'clamp(2px, 1vw, 4px)',
     fontFamily: 'Geist-Regular',
     textTransform: 'uppercase',
+    whiteSpace: 'nowrap',
+    maxWidth: '92vw',
+    animation: 'splashSubtitle 550ms ease-out 120ms both',
   },
 };

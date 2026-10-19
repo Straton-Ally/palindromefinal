@@ -45,6 +45,7 @@ import Animated, {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NO_CELL, useBoardDrag, useBoardSharedState, type BoardGeometry } from '@/components/game/boardDrag';
 import { COLOR_BLIND_TOKENS, SkiaGameBoard } from '@/components/game/SkiaGameBoard';
+import { AnimatedScore, ScoreFeedback } from '@/components/game/ScoreAnimations';
 
 function formatTime(ms: number): string {
   const totalSec = Math.max(0, Math.ceil(ms / 1000));
@@ -146,7 +147,7 @@ function PlayerCard({
           <Text style={[styles.playerStatLabel, { color: isDark ? 'rgba(255,255,255,0.6)' : 'rgba(15,23,42,0.6)' }]}>
             SCORE
           </Text>
-          <Text style={[styles.playerStatValue, { color: '#0060FF' }]}>{score}</Text>
+          <AnimatedScore value={score} style={[styles.playerStatValue, { color: '#0060FF' }]} />
         </View>
         <View
           style={[
@@ -427,19 +428,25 @@ export default function TurnGameNative() {
       return { row, col };
     });
     const { events } = scoreNewPalindromes(anchors, nextState.board, nextState.bulldog_positions ?? [], 3, previousBoard);
-    const event = events[0];
-    if (!event) return;
+    if (events.length === 0) return;
 
+    // Show every palindrome the opponent made (biggest first), 900 ms apart, like our own moves.
     scoringInProgressRef.current = true;
     setScoringInProgress(true);
-    const feedbackForLength = getScoringFeedbackForLength(event.segmentLength);
-    setFeedback({ text: feedbackForLength.text, color: feedbackForLength.color, id: Date.now() });
-    setScoredCells(event.segment.map((tile) => `${tile.r},${tile.c}`));
-    setScoredCellsRun(Date.now());
-    if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current);
-    scoredCellsTimerRef.current = setTimeout(() => {
-      finishTurnScoring();
-    }, 1600);
+    const runId = Date.now();
+    const showStep = (index: number) => {
+      const event = events[index];
+      const feedbackForLength = getScoringFeedbackForLength(event.segmentLength);
+      setFeedback({ text: feedbackForLength.text, color: feedbackForLength.color, id: runId + index });
+      setScoredCells(event.segment.map((tile) => `${tile.r},${tile.c}`));
+      setScoredCellsRun(runId + index);
+      if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current);
+      scoredCellsTimerRef.current = setTimeout(() => {
+        if (index + 1 < events.length) showStep(index + 1);
+        else finishTurnScoring();
+      }, index + 1 < events.length ? 900 : 1600);
+    };
+    showStep(0);
   }, [finishTurnScoring, gridSize, showOpponentMoveShimmer, turnState?.current_turn_user_id, turnState?.player1_score, turnState?.player2_score, userId]);
 
   // ── Layout ──
@@ -889,8 +896,8 @@ export default function TurnGameNative() {
 
             {/* Feedback overlay */}
             {feedback && (
-              <View pointerEvents="none" style={styles.feedbackContainer}>
-                <Text style={[styles.feedbackText, { color: feedback.color }]}>{feedback.text}</Text>
+              <View pointerEvents="none" style={styles.feedbackCenter}>
+                <ScoreFeedback key={feedback.id} text={feedback.text} color={feedback.color} />
               </View>
             )}
           </View>
@@ -1229,6 +1236,12 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
 
+  feedbackCenter: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
+  },
   feedbackContainer: {
     position: 'absolute',
     top: 10,

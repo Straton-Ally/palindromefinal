@@ -77,6 +77,22 @@ export default function SignupScreen() {
     }
   };
 
+  const handleAppleSignIn = async () => {
+    setLoading(true);
+    try {
+      const result = await authService.signInWithApple();
+      if (result.success) {
+        router.replace('/main');
+      } else {
+        Alert.alert('Signup Failed', result.error || 'Apple sign-in failed');
+      }
+    } catch (error: any) {
+      Alert.alert('Error', error?.message || 'Apple sign-in failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <LinearGradient
       colors={
@@ -117,7 +133,7 @@ export default function SignupScreen() {
                   styles.floatingLabel,
                   {
                     color: isDark ? '#FFF' : '#000',
-                    backgroundColor: isDark ? '#00001D' : '#FFF',
+                    backgroundColor: isDark ? 'transparent' : '#FFF',
                   },
                 ]}
               >
@@ -156,7 +172,7 @@ export default function SignupScreen() {
                   styles.floatingLabel,
                   {
                     color: isDark ? '#FFF' : '#000',
-                    backgroundColor: isDark ? '#00001D' : '#FFF',
+                    backgroundColor: isDark ? 'transparent' : '#FFF',
                   },
                 ]}
               >
@@ -196,7 +212,7 @@ export default function SignupScreen() {
                   styles.floatingLabel,
                   {
                     color: isDark ? '#FFF' : '#000',
-                    backgroundColor: isDark ? '#00001D' : '#FFF',
+                    backgroundColor: isDark ? 'transparent' : '#FFF',
                   },
                 ]}
               >
@@ -330,6 +346,24 @@ export default function SignupScreen() {
               <Image source={require('../../assets/images/google.png')} style={styles.googleIcon} />
               <Text style={[styles.googleText, { color: isDark ? '#FFFFFF' : '#111111' }]}>
                 Continue with Google
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.googleButton,
+                {
+                  borderColor: isDark ? 'rgba(255,255,255,0.25)' : '#E5E7EB',
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#FFFFFF',
+                },
+                loading && { opacity: 0.7 },
+              ]}
+              onPress={handleAppleSignIn}
+              disabled={loading}
+            >
+              <Ionicons name="logo-apple" size={24} color={isDark ? '#FFFFFF' : '#000000'} />
+              <Text style={[styles.googleText, { color: isDark ? '#FFFFFF' : '#111111' }]}>
+                Continue with Apple
               </Text>
             </TouchableOpacity>
 
@@ -482,7 +516,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 80,
     paddingVertical: 12,
-    marginBottom: 18,
+    marginBottom: 20,
   },
   googleIcon: {
     width: 18,
@@ -495,7 +529,10 @@ const styles = StyleSheet.create({
 
   // --- Footer ---
   footer: {
-    marginTop: 200,
+    // Sits at the bottom when there is room, but always keeps at least 32 below the buttons
+    // (a fixed 200 pushed it off the bottom edge once the Apple button was added).
+    marginTop: 'auto',
+    paddingTop: 32,
     alignItems: 'center',
   },
   footerText: {

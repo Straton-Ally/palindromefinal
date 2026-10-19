@@ -30,9 +30,20 @@ import {
   type SkImage,
   type SkParagraph,
 } from '@shopify/react-native-skia';
-import React, { memo, useMemo } from 'react';
+import React, { memo, useEffect, useMemo } from 'react';
 import { Pressable, StyleSheet, type GestureResponderEvent, type View } from 'react-native';
-import Animated, { useDerivedValue, type AnimatedRef, type SharedValue } from 'react-native-reanimated';
+import Animated, {
+  Easing,
+  cancelAnimation,
+  interpolate,
+  useDerivedValue,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withTiming,
+  type AnimatedRef,
+  type SharedValue,
+} from 'react-native-reanimated';
 
 import type { ColorBlindMode } from '@/context/SettingsContext';
 import { NO_CELL, boardPixelSize, type BoardGeometry } from './boardDrag';
@@ -247,6 +258,116 @@ const CellContent = memo(function CellContent(props: CellContentProps) {
   );
 });
 
+// -- Scoring celebration (mirrors the web game's CSS keyframes) --
+// Each scored tile animates for SCORE_FX_MS, staggered by SCORE_FX_STAGGER_MS from the placed block outward.
+const SCORE_FX_MS = 800;
+const SCORE_FX_STAGGER_MS = 150;
+const FX_STOPS = [0, 0.35, 0.7, 1];
+
+function useTileProgress(clock: SharedValue<number>, index: number) {
+  return useDerivedValue(() => {
+    const t = (clock.value - index * SCORE_FX_STAGGER_MS) / SCORE_FX_MS;
+    const clamped = t < 0 ? 0 : t > 1 ? 1 : t;
+    return Easing.out(Easing.quad)(clamped);
+  });
+}
+
+type ScoredFxProps = CellBox & {
+  index: number;
+  clock: SharedValue<number>;
+  isTurn: boolean;
+  fillA: string | null;
+  fillB: string | null;
+};
+
+/** Glow + zooming block + brightness flash + shimmer sweep for one scored tile (drawn under its letter). */
+const ScoredFx = memo(function ScoredFx(props: ScoredFxProps) {
+  const { x, y, w, h, r, index, clock, isTurn, fillA, fillB } = props;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const p = useTileProgress(clock, index);
+
+  // web scorePulse (cell): scale 1 > 1.14 > 1.08 > 1, glow 0 > 0.9 > 0.55 > 0
+  const cellTransform = useDerivedValue(() => [{ scale: interpolate(p.value, FX_STOPS, [1, 1.14, 1.08, 1]) }]);
+  const glowOpacity = useDerivedValue(() => interpolate(p.value, FX_STOPS, [0, 0.9, 0.55, 0]));
+  // web scoredBlockZoom: scale 1 > 1.2 > 1.1 > 1, brightness 1 > 1.22 > 1.1 > 1
+  const blockTransform = useDerivedValue(() => [{ scale: interpolate(p.value, FX_STOPS, [1, 1.2, 1.1, 1]) }]);
+  const brightness = useDerivedValue(() => interpolate(p.value, FX_STOPS, [0, 0.22, 0.1, 0]));
+  // web scoreShimmer: translateX -120% > 120%, opacity 0 > 0.85 (at 30%) > 0, skewX(-18deg)
+  const bandW = w * 0.6;
+  const shimmerTransform = useDerivedValue(() => [
+    { translateX: interpolate(p.value, [0, 1], [-1.2 * w, 1.2 * w]) },
+    { skewX: (-18 * Math.PI) / 180 },
+  ]);
+  const shimmerOpacity = useDerivedValue(() => interpolate(p.value, [0, 0.3, 1], [0, 0.85, 0]));
+
+  const gradStart = isTurn ? vec(x, y) : vec(cx, y);
+  const gradEnd = isTurn ? vec(x + w, y + h) : vec(cx, y + h);
+
+  return (
+    <Group origin={vec(cx, cy)} transform={cellTransform}>
+      <RoundedRect x={x} y={y} width={w} height={h} r={r} color={SCORED_BORDER} style="stroke" strokeWidth={4} opacity={glowOpacity}>
+        <BlurMask blur={9} style="outer" />
+      </RoundedRect>
+      {fillA && fillB ? (
+        <Group origin={vec(cx, cy)} transform={blockTransform}>
+          <RoundedRect x={x + 1} y={y + 1} width={w - 2} height={h - 2} r={r - 1}>
+            <LinearGradient start={gradStart} end={gradEnd} colors={[fillA, fillB]} />
+          </RoundedRect>
+          <RoundedRect x={x + 1} y={y + 1} width={w - 2} height={h - 2} r={r - 1} color="#FFFFFF" opacity={brightness} />
+        </Group>
+      ) : null}
+      <Group clip={rrect(rect(x, y, w, h), r, r)}>
+        <Group origin={vec(cx, cy)} transform={shimmerTransform} opacity={shimmerOpacity}>
+          <Rect x={cx - bandW / 2} y={y - h * 0.2} width={bandW} height={h * 1.4}>
+            <LinearGradient
+              start={vec(cx - bandW / 2, cy)}
+              end={vec(cx + bandW / 2, cy)}
+              colors={['rgba(255,255,255,0)', 'rgba(255,255,255,0.85)', 'rgba(255,255,255,0)']}
+            />
+          </Rect>
+        </Group>
+      </Group>
+    </Group>
+  );
+});
+
+/** Gold border of a scored tile; pulses with the same scale as its glow (drawn above the letter). */
+const ScoredBorder = memo(function ScoredBorder(props: CellBox & { index: number; clock: SharedValue<number> }) {
+  const { x, y, w, h, r, index, clock } = props;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const p = useTileProgress(clock, index);
+  const transform = useDerivedValue(() => [{ scale: interpolate(p.value, FX_STOPS, [1, 1.14, 1.08, 1]) }]);
+  return (
+    <Group origin={vec(cx, cy)} transform={transform}>
+      <RoundedRect x={x + 1} y={y + 1} width={w - 2} height={h - 2} r={r - 1} color={SCORED_BORDER} style="stroke" strokeWidth={2} />
+    </Group>
+  );
+});
+
+/** Hint preview that breathes like the web game (opacity 0.3 > 0.72, scale 0.95 > 1.05, 1.5 s loop). */
+const HintFx = memo(function HintFx(props: CellBox & { hintA: string; hintB: string }) {
+  const { x, y, w, h, r, hintA, hintB } = props;
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const pulse = useSharedValue(0);
+  useEffect(() => {
+    const half = { duration: 750, easing: Easing.inOut(Easing.ease) };
+    pulse.value = withRepeat(withSequence(withTiming(1, half), withTiming(0, half)), -1);
+    return () => cancelAnimation(pulse);
+  }, [pulse]);
+  const opacity = useDerivedValue(() => interpolate(pulse.value, [0, 1], [0.3, 0.72]));
+  const transform = useDerivedValue(() => [{ scale: interpolate(pulse.value, [0, 1], [0.95, 1.05]) }]);
+  return (
+    <Group origin={vec(cx, cy)} transform={transform} opacity={opacity}>
+      <RoundedRect x={x + 1} y={y + 1} width={w - 2} height={h - 2} r={r - 1}>
+        <LinearGradient start={vec(cx, y)} end={vec(cx, y + h)} colors={[hintA, hintB]} />
+      </RoundedRect>
+    </Group>
+  );
+});
+
 function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
   const {
     variant,
@@ -300,10 +421,24 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
   const scoredMap = useMemo(() => new Map(scoredCells.map((key, i) => [key, i] as const)), [scoredCells]);
   const shimmerSet = useMemo(() => new Set(shimmerCells ?? []), [shimmerCells]);
 
+  // Scoring celebration clock: restarts whenever a new set of scored tiles arrives.
+  const scoreClock = useSharedValue(0);
+  useEffect(() => {
+    cancelAnimation(scoreClock);
+    scoreClock.value = 0;
+    if (scoredCells.length === 0) return;
+    const total = (scoredCells.length - 1) * SCORE_FX_STAGGER_MS + SCORE_FX_MS;
+    scoreClock.value = withTiming(total, { duration: total, easing: Easing.linear });
+  }, [scoreClock, scoredCells, scoredRun]);
+
   // Per-cell elements. Building this array is cheap; React then only re-renders
   // the memoized cells whose props actually changed.
   const bases: React.ReactNode[] = [];
   const contents: React.ReactNode[] = [];
+  // Scored tiles are drawn above their neighbours (like the web's z-index): fx, then their letters, then borders.
+  const scoredFx: React.ReactNode[] = [];
+  const scoredContents: React.ReactNode[] = [];
+  const scoredBorders: React.ReactNode[] = [];
   for (let row = 0; row < gridSize; row++) {
     for (let col = 0; col < gridSize; col++) {
       const key = `${row},${col}`;
@@ -339,7 +474,29 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
         else if (!letter) bulldogMode = colorIndex !== null ? 'centerFaded' : 'center';
       }
 
-      contents.push(
+      if (hintGradient) {
+        contents.push(<HintFx key={`hfx${key}`} x={x} y={y} w={cw} h={ch} r={radius} hintA={hintGradient[0]} hintB={hintGradient[1]} />);
+      }
+      if (isScored) {
+        scoredFx.push(
+          <ScoredFx
+            key={`sfx${key}`}
+            x={x}
+            y={y}
+            w={cw}
+            h={ch}
+            r={radius}
+            index={scoredIndex}
+            clock={scoreClock}
+            isTurn={isTurn}
+            fillA={gradient ? gradient[0] : null}
+            fillB={gradient ? gradient[1] : null}
+          />
+        );
+        scoredBorders.push(<ScoredBorder key={`sb${key}`} x={x} y={y} w={cw} h={ch} r={radius} index={scoredIndex} clock={scoreClock} />);
+      }
+
+      (isScored ? scoredContents : contents).push(
         <CellContent
           key={key}
           x={x}
@@ -348,12 +505,12 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
           h={ch}
           r={radius}
           isTurn={isTurn}
-          fillA={gradient ? gradient[0] : null}
-          fillB={gradient ? gradient[1] : null}
-          fillScale={isTurn && isScored ? (scoredRun % 2 === 0 ? 1.14 : 1.1) : 1}
-          fillOpacity={isTurn && isScored && scoredIndex % 2 === 1 ? 0.96 : 1}
-          hintA={hintGradient ? hintGradient[0] : null}
-          hintB={hintGradient ? hintGradient[1] : null}
+          fillA={gradient && !isScored ? gradient[0] : null}
+          fillB={gradient && !isScored ? gradient[1] : null}
+          fillScale={1}
+          fillOpacity={1}
+          hintA={null}
+          hintB={null}
           bulldog={bulldogMode === 'none' ? null : bulldogImage}
           bulldogMode={bulldogMode}
           letter={letter}
@@ -368,7 +525,7 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
             tokenParagraphs?.corner && colorIndex !== null && letter ? tokenParagraphs.corner[colorIndex] ?? null : null
           }
           hintToken={tokenParagraphs && isHint && hint ? tokenParagraphs.center[hint.colorIndex] ?? null : null}
-          outline={outline}
+          outline={isScored ? 'none' : outline}
         />
       );
     }
@@ -409,6 +566,9 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
       {bases}
       <RoundedRect x={hoverX} y={hoverY} width={cw} height={ch} r={radius} color={hoverBg} />
       {contents}
+      {scoredFx}
+      {scoredContents}
+      {scoredBorders}
       {shimmerLayer}
       <RoundedRect
         x={hoverBorderX}

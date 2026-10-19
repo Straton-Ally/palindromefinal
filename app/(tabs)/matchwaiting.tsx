@@ -1,4 +1,5 @@
 import { authService } from '@/authService';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 import { useThemeContext } from '@/context/ThemeContext';
 import { getMatch, leaveMatch, subscribeToMatch, type Match } from '@/lib/matchmaking';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,7 +8,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
+  BackHandler,
   Pressable,
   StyleSheet,
   Text,
@@ -28,6 +29,8 @@ export default function MatchWaitingScreen() {
   const [inviteCodeFromMatch, setInviteCodeFromMatch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [leaving, setLeaving] = useState(false);
+  const [leaveConfirmVisible, setLeaveConfirmVisible] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -83,26 +86,36 @@ export default function MatchWaitingScreen() {
       return;
     }
     setLeaving(true);
+    setLeaveError(null);
     try {
       await leaveMatch(matchId, user.id);
+      setLeaveConfirmVisible(false);
       router.replace(backTarget);
     } catch {
-      Alert.alert('Error', 'Could not leave match.');
+      setLeaveError('Could not leave match. Please try again.');
     } finally {
       setLeaving(false);
     }
   }, [matchId, router, backTarget]);
 
   const goBack = useCallback(() => {
-    Alert.alert(
-      'Leave match?',
-      'If you leave, the match will be cancelled.',
-      [
-        { text: 'Stay', style: 'cancel' },
-        { text: 'Leave', style: 'destructive', onPress: handleCancel },
-      ]
-    );
-  }, [handleCancel]);
+    setLeaveError(null);
+    setLeaveConfirmVisible(true);
+  }, []);
+
+  // Android back button: ask with the in-app dialog instead of silently leaving the match open.
+  useEffect(() => {
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (leaving) return true;
+      if (leaveConfirmVisible) {
+        setLeaveConfirmVisible(false);
+        return true;
+      }
+      goBack();
+      return true;
+    });
+    return () => sub.remove();
+  }, [goBack, leaveConfirmVisible, leaving]);
 
   const rawDisplayCode = (inviteCodeParam ?? inviteCodeFromMatch ?? match?.invite_code ?? '').toString().toUpperCase();
   const displayCode = rawDisplayCode.startsWith('CHAL') ? '' : rawDisplayCode;
@@ -164,6 +177,18 @@ export default function MatchWaitingScreen() {
           </Pressable>
         </View>
       </SafeAreaView>
+      <ConfirmDialog
+        visible={leaveConfirmVisible}
+        isDark={isDark}
+        title="Leave match?"
+        message="If you leave, the match will be cancelled."
+        cancelLabel="Stay"
+        confirmLabel="Leave"
+        error={leaveError}
+        busy={leaving}
+        onCancel={() => setLeaveConfirmVisible(false)}
+        onConfirm={() => void handleCancel()}
+      />
     </LinearGradient>
   );
 }

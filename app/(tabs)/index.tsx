@@ -198,7 +198,7 @@ export default function LoginScreen() {
                       style={[
                         styles.floatingLabel,
                         {
-                          backgroundColor: isDark ? 'rgba(0,0,23,1)' : '#FFF',
+                          backgroundColor: isDark ? 'transparent' : '#FFF',
                           color: isDark ? '#FFF' : '#000',
                         },
                       ]}
@@ -234,7 +234,7 @@ export default function LoginScreen() {
                       style={[
                         styles.floatingLabel,
                         {
-                          backgroundColor: isDark ? 'rgba(0,0,23,1)' : '#FFF',
+                          backgroundColor: isDark ? 'transparent' : '#FFF',
                           color: isDark ? '#FFF' : '#000',
                         },
                       ]}
@@ -354,7 +354,6 @@ export default function LoginScreen() {
                     {
                       borderColor: isDark ? 'rgba(255,255,255,0.25)' : '#E5E7EB',
                       backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : '#FFFFFF',
-                      marginTop: 12,
                     },
                     loading && { opacity: 0.7 },
                   ]}
@@ -365,7 +364,6 @@ export default function LoginScreen() {
                     name="logo-apple"
                     size={24}
                     color={isDark ? '#FFFFFF' : '#000000'}
-                    style={{ marginRight: 10 }}
                   />
                   <Text style={[styles.googleText, { color: isDark ? '#FFFFFF' : '#111111' }]}>
                     Continue with Apple
@@ -605,7 +603,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderRadius: 80,
     paddingVertical: 12,
-    marginBottom: 18,
+    marginBottom: 20,
   },
   googleIcon: {
     width: 18,

@@ -19,11 +19,13 @@ const WEB_TONES: Record<SoundKey, WebTone> = {
   success: { type: 'triangle', frequency: 660, durationMs: 140, attackMs: 8, gain: 0.1 },
 };
 
-const NATIVE_SOUND_URIS: Record<SoundKey, string> = {
-  pickup: 'https://actions.google.com/sounds/v1/cartoon/pop.ogg',
-  drop: 'https://actions.google.com/sounds/v1/cartoon/wood_plank_flicks.ogg',
-  error: 'https://actions.google.com/sounds/v1/cartoon/clang_and_wobble.ogg',
-  success: 'https://actions.google.com/sounds/v1/cartoon/ta_da.ogg',
+// Bundled with the app (generated from WEB_TONES by scripts/generate-sounds.py), so native
+// sounds match the web game, work offline and have no first-play network delay.
+const NATIVE_SOUND_SOURCES: Record<SoundKey, number> = {
+  pickup: require('../assets/sounds/pickup.wav'),
+  drop: require('../assets/sounds/drop.wav'),
+  error: require('../assets/sounds/error.wav'),
+  success: require('../assets/sounds/success.wav'),
 };
 
 export function useSound() {
@@ -90,9 +92,9 @@ export function useSound() {
         shouldRouteThroughEarpiece: false,
       });
 
-      const entries = (Object.keys(NATIVE_SOUND_URIS) as SoundKey[]).map(async (key) => {
+      const entries = (Object.keys(NATIVE_SOUND_SOURCES) as SoundKey[]).map(async (key) => {
         try {
-          const player = createAudioPlayer(NATIVE_SOUND_URIS[key]);
+          const player = createAudioPlayer(NATIVE_SOUND_SOURCES[key]);
           return [key, player] as const;
         } catch {
           return null;

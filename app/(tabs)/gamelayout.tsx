@@ -47,6 +47,7 @@ import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, su
 import { getMyBestSinglePlayer, saveSinglePlayerRun } from '@/lib/singlePlayer';
 import { NO_CELL, useBoardDrag, useBoardSharedState, type BoardGeometry } from '@/components/game/boardDrag';
 import { SkiaGameBoard } from '@/components/game/SkiaGameBoard';
+import { AnimatedScore, ScoreFeedback } from '@/components/game/ScoreAnimations';
 
 const COLOR_BLIND_TOKENS: Record<ColorBlindMode, readonly string[]> = {
   symbols: ['●', '▲', '■', '◆', '★'],
@@ -558,6 +559,7 @@ export default function GameLayout() {
   const settingsCardHeight = Math.min(windowHeight * 0.78, windowHeight - insets.top - insets.bottom - 48);
 
   const [score, setScore] = useState(0);
+  const [displayScore, setDisplayScore] = useState(0);
   const [hints, setHints] = useState(2);
   const [time, setTime] = useState('00:00');
   const [bulldogPositions, setBulldogPositions] = useState<{ row: number; col: number }[]>([]);
@@ -799,6 +801,12 @@ export default function GameLayout() {
   const [scoringInProgress, setScoringInProgress] = useState(false);
   const scoringInProgressRef = useRef(false);
   const scoredCellsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Timers for the 2nd, 3rd... palindrome of a multi-palindrome move.
+  const scoringStepTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const clearScoringStepTimers = useCallback(() => {
+    scoringStepTimersRef.current.forEach((timer) => clearTimeout(timer));
+    scoringStepTimersRef.current = [];
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -806,8 +814,9 @@ export default function GameLayout() {
         clearTimeout(scoredCellsTimerRef.current);
         scoredCellsTimerRef.current = null;
       }
+      clearScoringStepTimers();
     };
-  }, []);
+  }, [clearScoringStepTimers]);
 
   const boardRef = useRef<View | null>(null);
   const gridRef = useAnimatedRef<View>();
@@ -847,6 +856,7 @@ export default function GameLayout() {
 
   useEffect(() => {
     scoreRef.current = score;
+    if (!scoringInProgressRef.current) setDisplayScore(score);
   }, [score]);
 
   useEffect(() => {
@@ -891,7 +901,8 @@ export default function GameLayout() {
       clearTimeout(scoredCellsTimerRef.current);
       scoredCellsTimerRef.current = null;
     }
-  }, [hoverCell]);
+    clearScoringStepTimers();
+  }, [clearScoringStepTimers, hoverCell]);
 
   useEffect(() => {
     if (matchId) return;
@@ -1135,6 +1146,7 @@ export default function GameLayout() {
   }, [matchId, multiplayerFirstMoveAt, multiplayerTimeLimit, scoreSubmitted, submitRaceScoreWhenReady]);
 
   // Fetch/Refresh user profile
+  const profileFetchedRef = useRef(false);
   useEffect(() => {
     const fetchProfile = async () => {
       try {
@@ -1159,10 +1171,9 @@ export default function GameLayout() {
       }
     };
 
-    if (settingsVisible) {
-      fetchProfile();
-    }
-    // Initial fetch on mount as well
+    // Fetch once on mount and again each time Settings opens (not twice on open, not on close).
+    if (!settingsVisible && profileFetchedRef.current) return;
+    profileFetchedRef.current = true;
     fetchProfile();
   }, [settingsVisible]);
 
@@ -1190,22 +1201,12 @@ export default function GameLayout() {
         return scoreFound;
       }
 
-      let feedbackText = "GOOD!";
-      let feedbackColor = "#4ADE80";
-      const topEvent = events[0];
-      if (topEvent?.segmentLength === 5) {
-        feedbackText = "GREAT!";
-        feedbackColor = "#60A5FA";
-      } else if (topEvent?.segmentLength === 7) {
-        feedbackText = "AMAZING!";
-        feedbackColor = "#A78BFA";
-      } else if ((topEvent?.segmentLength ?? 0) >= 9) {
-        feedbackText = "LEGENDARY!";
-        feedbackColor = "#F472B6";
-      }
-
-      setFeedback({ text: feedbackText, color: feedbackColor, id: Date.now() });
-      setTimeout(() => setFeedback(null), 2000);
+      const feedbackFor = (segmentLength: number) => {
+        if (segmentLength >= 9) return { text: "LEGENDARY!", color: "#F472B6" };
+        if (segmentLength === 7) return { text: "AMAZING!", color: "#A78BFA" };
+        if (segmentLength === 5) return { text: "GREAT!", color: "#60A5FA" };
+        return { text: "GOOD!", color: "#4ADE80" };
+      };
 
       scoringInProgressRef.current = true;
       if (matchId && racePauseStartedAtRef.current == null) {
@@ -1213,20 +1214,46 @@ export default function GameLayout() {
       }
       setScoringInProgress(true);
 
-      const keys = events[0]?.segment.map((tile) => `${tile.r},${tile.c}`) ?? [];
-      setScoredCells(keys.length ? keys : [...new Set(events.flatMap((event) => event.segment.map((tile) => `${tile.r},${tile.c}`)))]);
+      // Like the web game: every palindrome made by this move is shown in turn (biggest first),
+      // 900 ms apart, each with its own tiles, feedback text, sound and score step.
+      // The score itself was already added in full above; only the presentation is sequenced.
+      const SCORING_STEP_MS = 900;
+      const runId = Date.now();
+      const baseDisplayScore = scoreRef.current;
+      clearScoringStepTimers();
+      let runningScore = baseDisplayScore;
+      events.forEach((event, index) => {
+        runningScore += event.score;
+        const shownScore = runningScore;
+        const showStep = () => {
+          const fb = feedbackFor(event.segmentLength);
+          setFeedback({ text: fb.text, color: fb.color, id: runId + index });
+          setScoredCells(event.segment.map((tile) => `${tile.r},${tile.c}`));
+          setDisplayScore(shownScore);
+          if (index > 0) {
+            triggerHaptic('success');
+            playSuccessSound();
+          }
+        };
+        if (index === 0) showStep();
+        else scoringStepTimersRef.current.push(setTimeout(showStep, index * SCORING_STEP_MS));
+      });
+
       if (scoredCellsTimerRef.current) clearTimeout(scoredCellsTimerRef.current);
       scoredCellsTimerRef.current = setTimeout(() => {
         setScoredCells([]);
+        setFeedback(null);
         scoredCellsTimerRef.current = null;
+        scoringStepTimersRef.current = [];
         scoringInProgressRef.current = false;
+        setDisplayScore(scoreRef.current);
         if (matchId && racePauseStartedAtRef.current != null) {
           racePausedMsRef.current += Date.now() - racePauseStartedAtRef.current;
           racePauseStartedAtRef.current = null;
         }
         setScoringInProgress(false);
         flushDeferredRaceCompletion();
-      }, 2000);
+      }, (events.length - 1) * SCORING_STEP_MS + 2000);
     }
 
     return scoreFound;
@@ -1622,14 +1649,13 @@ export default function GameLayout() {
         <Text style={[styles.rectangleLabel, { color: theme === 'dark' ? '#FFFFFF' : '#4C575F' }]}>
           Score
         </Text>
-        <Text
+        <AnimatedScore
+          value={displayScore}
           style={[
             styles.rectangleValue,
             { color: theme === 'dark' ? '#FFFFFF' : '#0060FF' },
           ]}
-        >
-          {score}
-        </Text>
+        />
       </View>
 
       <Pressable
@@ -1723,10 +1749,8 @@ export default function GameLayout() {
           onCellPress={interactionMode === 'pick' ? handleBoardCellPress : undefined}
         />
         {feedback && (
-          <View pointerEvents="none" style={styles.feedbackContainer}>
-            <Text style={[styles.feedbackText, { color: feedback.color }]}>
-              {feedback.text}
-            </Text>
+          <View pointerEvents="none" style={styles.feedbackCenter}>
+            <ScoreFeedback key={feedback.id} text={feedback.text} color={feedback.color} />
           </View>
         )}
       </View>
@@ -2921,6 +2945,12 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 
+  feedbackCenter: {
+    ...StyleSheet.absoluteFillObject,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
+  },
   feedbackContainer: {
     position: 'absolute',
     top: 8,

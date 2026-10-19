@@ -176,41 +176,46 @@ export default function RootLayout() {
     }
   }, [user, segments, authLoading, router]);
 
-  const shouldShowSplash = !fontsLoaded || authLoading || showSplash;
+  // The app mounts underneath as soon as it is ready; the splash plays its animation on top
+  // (minimum time so it never flashes) and fades out to reveal the already-routed screen.
+  const appReady = fontsLoaded && !authLoading;
 
-  const handleSplashReady = useCallback(() => {
+  const handleSplashFinish = useCallback(() => {
     if (splashHiddenRef.current) return;
     splashHiddenRef.current = true;
-    setTimeout(() => setShowSplash(false), 0);
+    setShowSplash(false);
   }, []);
 
-  if (shouldShowSplash) {
-    return (
-      <>
-        {Platform.OS === 'web'
-          ? React.createElement('style', { dangerouslySetInnerHTML: { __html: webFontCss } })
-          : null}
-        <SplashScreen onReady={handleSplashReady} />
-      </>
-    );
-  }
-
-  // ✅ Wrap your entire app in ThemeProvider
   return (
-    <ThemeProvider>
-      <SettingsProvider>
-        {Platform.OS === 'web'
-          ? React.createElement('style', { dangerouslySetInnerHTML: { __html: webFontCss } })
-          : null}
-        <AppContent />
-      </SettingsProvider>
-    </ThemeProvider>
+    <>
+      {Platform.OS === 'web'
+        ? React.createElement('style', { dangerouslySetInnerHTML: { __html: webFontCss } })
+        : null}
+      {appReady ? (
+        // ✅ Wrap your entire app in ThemeProvider
+        <ThemeProvider>
+          <SettingsProvider>
+            <AppContent />
+          </SettingsProvider>
+        </ThemeProvider>
+      ) : null}
+      {showSplash ? (
+        <View style={styles.splashOverlay}>
+          <SplashScreen ready={appReady} onFinish={handleSplashFinish} />
+        </View>
+      ) : null}
+    </>
   );
 }
 
 const styles = StyleSheet.create({
   gradient: {
     flex: 1,
+  },
+  splashOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 99999,
+    elevation: 99999,
   },
   storeOverlay: {
     ...StyleSheet.absoluteFillObject,

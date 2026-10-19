@@ -21,6 +21,8 @@ export default function MatchWaitingWebScreen() {
   const [inviteCodeFromMatch, setInviteCodeFromMatch] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [leaving, setLeaving] = useState(false);
+  const [leaveConfirmVisible, setLeaveConfirmVisible] = useState(false);
+  const [leaveError, setLeaveError] = useState<string | null>(null);
   const unsubRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
@@ -76,15 +78,32 @@ export default function MatchWaitingWebScreen() {
       return;
     }
     setLeaving(true);
+    setLeaveError(null);
     try {
       await leaveMatch(matchId, user.id);
+      setLeaveConfirmVisible(false);
       router.replace(backTarget);
     } catch {
-      // ignore
+      setLeaveError('Could not leave match. Please try again.');
     } finally {
       setLeaving(false);
     }
   }, [matchId, router, backTarget]);
+
+  // Ask before cancelling, same as the mobile app.
+  const askToLeave = useCallback(() => {
+    setLeaveError(null);
+    setLeaveConfirmVisible(true);
+  }, []);
+
+  useEffect(() => {
+    if (!leaveConfirmVisible) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !leaving) setLeaveConfirmVisible(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [leaveConfirmVisible, leaving]);
 
   const rawDisplayCode = (inviteCodeParam ?? inviteCodeFromMatch ?? match?.invite_code ?? '').toString().toUpperCase();
   const displayCode = rawDisplayCode.startsWith('CHAL') ? '' : rawDisplayCode;
@@ -104,7 +123,7 @@ export default function MatchWaitingWebScreen() {
     >
       <View style={styles.safe}>
         <View style={styles.header}>
-          <Pressable onPress={handleCancel} style={styles.backBtn} accessibilityLabel="Cancel">
+          <Pressable onPress={askToLeave} style={styles.backBtn} accessibilityLabel="Cancel">
             <Ionicons name="arrow-back" size={24} color={text} />
           </Pressable>
           <Text style={[styles.title, { color: text }]}>Waiting for opponent</Text>
@@ -134,7 +153,7 @@ export default function MatchWaitingWebScreen() {
           )}
 
           <Pressable
-            onPress={handleCancel}
+            onPress={askToLeave}
             disabled={leaving}
             style={[styles.cancelBtn, { borderColor: colors.accent, opacity: leaving ? 0.6 : 1 }]}
           >
@@ -144,6 +163,107 @@ export default function MatchWaitingWebScreen() {
           </Pressable>
         </View>
       </View>
+
+      {leaveConfirmVisible ? (
+        <div
+          onClick={() => {
+            if (!leaving) setLeaveConfirmVisible(false);
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 1000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '0 30px',
+            backgroundColor: 'rgba(0,0,0,0.4)',
+            backdropFilter: 'blur(6px)',
+            WebkitBackdropFilter: 'blur(6px)',
+            animation: 'mwFadeIn 160ms ease-out',
+          }}
+        >
+          <style>{`
+            @keyframes mwFadeIn { from { opacity: 0; } to { opacity: 1; } }
+            @keyframes mwZoomIn { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: scale(1); } }
+          `}</style>
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="leave-match-title"
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: '100%',
+              maxWidth: 400,
+              borderRadius: 32,
+              padding: 32,
+              boxShadow: '0px 20px 40px rgba(0, 0, 0, 0.4)',
+              background: isDark ? 'linear-gradient(to right bottom, #000017, #000074)' : '#FFFFFF',
+              border: '1px solid rgba(255,255,255,0.1)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              animation: 'mwZoomIn 200ms cubic-bezier(0.2, 0.9, 0.3, 1.2)',
+            }}
+          >
+            <h2
+              id="leave-match-title"
+              style={{ fontSize: 24, fontWeight: 700, color: text, fontFamily: 'Geist-Regular, system-ui', margin: '0 0 16px', textAlign: 'center' }}
+            >
+              Leave match?
+            </h2>
+            <p style={{ fontSize: 16, color: text, opacity: 0.8, fontFamily: 'Geist-Regular, system-ui', margin: '0 0 32px', textAlign: 'center' }}>
+              If you leave, the match will be cancelled.
+            </p>
+            {leaveError ? (
+              <p style={{ fontSize: 14, color: '#ef4444', fontFamily: 'Geist-Regular, system-ui', margin: '-20px 0 20px', textAlign: 'center' }}>
+                {leaveError}
+              </p>
+            ) : null}
+            <div style={{ display: 'flex', flexDirection: 'row', gap: 20, width: '100%' }}>
+              <button
+                type="button"
+                onClick={() => setLeaveConfirmVisible(false)}
+                disabled={leaving}
+                style={{
+                  flex: 1,
+                  padding: 16,
+                  borderRadius: 16,
+                  border: 'none',
+                  backgroundColor: isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.05)',
+                  color: text,
+                  fontSize: 16,
+                  fontWeight: 600,
+                  fontFamily: 'Geist-Regular, system-ui',
+                  cursor: leaving ? 'default' : 'pointer',
+                }}
+              >
+                Stay
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleCancel()}
+                disabled={leaving}
+                style={{
+                  flex: 1,
+                  padding: 16,
+                  borderRadius: 16,
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                  color: '#FFFFFF',
+                  fontSize: 16,
+                  fontWeight: 700,
+                  fontFamily: 'Geist-Regular, system-ui',
+                  cursor: leaving ? 'default' : 'pointer',
+                  opacity: leaving ? 0.7 : 1,
+                }}
+              >
+                {leaving ? 'Leaving...' : 'Leave'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

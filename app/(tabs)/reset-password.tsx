@@ -89,7 +89,7 @@ export default function ResetPasswordScreen() {
           style={[
             styles.floatingLabel,
             {
-              backgroundColor: isDark ? 'rgba(0,0,23,1)' : '#FFF',
+              backgroundColor: isDark ? 'transparent' : '#FFF',
               color: isDark ? '#FFF' : '#000',
             },
           ]}
