@@ -41,11 +41,13 @@ import { authService } from '@/authService';
 import { ColorBlindMode, useSettings } from '@/context/SettingsContext';
 import { useThemeContext } from '@/context/ThemeContext';
 import { useSound } from '@/hooks/use-sound';
-import { DEFAULT_GAME_GRADIENTS } from '@/lib/gameColors';
+import { DARK_COUNTER_OUTLINE, DEFAULT_GAME_GRADIENTS } from '@/lib/gameColors';
 import { createInitialState, createSinglePlayerInitialState, scoreNewPalindromes } from '@/lib/gameEngine';
 import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, subscribeToMatch, subscribeToRacePresence, updateLiveScore, type Match, type MatchPlayer } from '@/lib/matchmaking';
 import { getMyBestSinglePlayer, saveSinglePlayerRun } from '@/lib/singlePlayer';
 import { NO_CELL, useBoardDrag, useBoardSharedState, type BoardGeometry } from '@/components/game/boardDrag';
+import { GameToast, useGameToast } from '@/components/game/GameToast';
+import { PLACEMENT_MESSAGES } from '@/components/game/placementMessages';
 import { SkiaGameBoard } from '@/components/game/SkiaGameBoard';
 import { AnimatedScore, ScoreFeedback } from '@/components/game/ScoreAnimations';
 
@@ -78,6 +80,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
   occupied,
   onDrop,
   onPickup,
+  onTap,
 }: {
   index: number;
   gradient: readonly [string, string];
@@ -87,8 +90,13 @@ const DraggableBlock = React.memo(function DraggableBlock({
   occupied: SharedValue<number[]>;
   onDrop: (row: number, col: number, colorIndex: number) => void;
   onPickup: (colorIndex: number) => void;
+  onTap: (colorIndex: number) => void;
 }) {
   const { colorBlindEnabled, colorBlindMode } = useSettings();
+  const { theme } = useThemeContext();
+  // The border is always there (only its colour changes): on Android, adding a border to a rounded
+  // view at runtime (dark mode toggled back on) draws it with square corners.
+  const ring = theme === 'dark' ? styles.darkCounterRing : styles.counterRingHidden;
   const [isDragging, setIsDragging] = useState(false);
   const token = colorBlindEnabled ? getColorBlindToken(colorBlindMode, index) : null;
   const blockRef = useAnimatedRef<View>();
@@ -105,6 +113,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
     onPickup: () => onPickup(index),
     onDrop: (row, col) => onDrop(row, col, index),
     onDraggingChange: setIsDragging,
+    onTap: () => onTap(index),
   });
 
   return (
@@ -115,7 +124,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
           colors={gradient}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={styles.gradientColorBlock}
+          style={[styles.gradientColorBlock, ring]}
         >
           {token ? <Text style={styles.colorBlindBlockTokenCorner}>{blockCount}</Text> : null}
           <Text style={token ? styles.colorBlindBlockTokenCenter : styles.blockText}>{token ? token : blockCount}</Text>
@@ -143,7 +152,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
             colors={gradient}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={styles.gradientColorBlock}
+            style={[styles.gradientColorBlock, ring]}
           >
             {/* Hide number when dragging for "picking one" look */}
             {token ? <Text style={styles.colorBlindBlockTokenCorner}>{blockCount}</Text> : null}
@@ -170,6 +179,10 @@ const PaletteBlock = ({
   onPress: () => void;
 }) => {
   const { colorBlindEnabled, colorBlindMode } = useSettings();
+  const { theme } = useThemeContext();
+  // The border is always there (only its colour changes): on Android, adding a border to a rounded
+  // view at runtime (dark mode toggled back on) draws it with square corners.
+  const ring = theme === 'dark' ? styles.darkCounterRing : styles.counterRingHidden;
   const token = colorBlindEnabled ? getColorBlindToken(colorBlindMode, index) : null;
   const disabled = blockCount <= 0;
 
@@ -189,7 +202,7 @@ const PaletteBlock = ({
           colors={gradient}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={styles.gradientColorBlock}
+          style={[styles.gradientColorBlock, ring]}
         >
           {token ? <Text style={styles.colorBlindBlockTokenCorner}>{blockCount}</Text> : null}
           <Text style={token ? styles.colorBlindBlockTokenCenter : styles.blockText}>{token ? token : blockCount}</Text>
@@ -633,6 +646,7 @@ export default function GameLayout() {
   const [userName, setUserName] = useState('User');
   const [profileImage, setProfileImage] = useState<string | null>(null);
   const [pickTargetCell, setPickTargetCell] = useState<{ row: number; col: number } | null>(null);
+  const { toast, showToast } = useGameToast();
   const [pickSelectedColor, setPickSelectedColor] = useState<number | null>(null);
   const noHintsAnim = useSharedValue(0);
   const hintsCountStyle = useAnimatedStyle(() => ({
@@ -1311,12 +1325,14 @@ export default function GameLayout() {
     if (gridStateRef.current[row][col] !== null) {
       playErrorSound();
       triggerHaptic('error');
+      showToast(PLACEMENT_MESSAGES.occupied);
       return false;
     }
 
     if (blockCountsRef.current[colorIndex] <= 0) {
       playErrorSound();
       triggerHaptic('error');
+      showToast(PLACEMENT_MESSAGES.noCounters);
       return false;
     }
 
@@ -1363,6 +1379,7 @@ export default function GameLayout() {
         setGridState(revertedGrid);
         setBlockCounts(revertedCounts);
         setFirstMovePlacements([]);
+        showToast(PLACEMENT_MESSAGES.firstMove);
 
         const nextWrongTries = wrongForcedTriesRef.current + 1;
         const nextValue = nextWrongTries >= 3 ? 0 : nextWrongTries;
@@ -1425,6 +1442,7 @@ export default function GameLayout() {
 
           playErrorSound();
           triggerHaptic('error');
+          showToast(PLACEMENT_MESSAGES.noPalindrome);
 
           if (nextWrongTries >= 3) {
             if (hintsRef.current > 0) {
@@ -1488,31 +1506,44 @@ export default function GameLayout() {
     return true;
   };
 
-  const handlePickColor = (colorIndex: number) => {
-    if (interactionMode !== 'pick') return;
+  // "Tap a square, then a colour": place the colour on the selected square.
+  const placeAtPickTarget = (colorIndex: number) => {
     if (!pickTargetCell) {
-      playErrorSound();
       triggerHaptic('error');
+      showToast(PLACEMENT_MESSAGES.pickSquareFirst);
       return;
     }
-
-    setPickSelectedColor(colorIndex);
-    playPickupSound();
-    triggerHaptic('pickup');
     if (!isTimerRunning) setIsTimerRunning(true);
-
     const didPlace = handleDrop(pickTargetCell.row, pickTargetCell.col, colorIndex);
     if (didPlace) {
       setPickTargetCell(null);
     }
-    setTimeout(() => setPickSelectedColor(null), 150);
   };
+
+  const handlePickColor = (colorIndex: number) => {
+    if (interactionMode !== 'pick') return;
+    if (pickTargetCell) {
+      setPickSelectedColor(colorIndex);
+      playPickupSound();
+      triggerHaptic('pickup');
+      setTimeout(() => setPickSelectedColor(null), 150);
+    }
+    placeAtPickTarget(colorIndex);
+  };
+
+  // A drag that fills the selected square clears the selection.
+  useEffect(() => {
+    if (pickTargetCell && gridState[pickTargetCell.row]?.[pickTargetCell.col] !== null) {
+      setPickTargetCell(null);
+    }
+  }, [gridState, pickTargetCell]);
 
 
   const handleBoardCellPress = useCallback((row: number, col: number) => {
     if (gridStateRef.current[row][col] !== null) {
       playErrorSound();
       triggerHaptic('error');
+      showToast(PLACEMENT_MESSAGES.occupied);
       return;
     }
     setPickTargetCell((prev) => {
@@ -1520,7 +1551,7 @@ export default function GameLayout() {
       return { row, col };
     });
     triggerHaptic('pickup');
-  }, [playErrorSound, triggerHaptic]);
+  }, [playErrorSound, showToast, triggerHaptic]);
 
   // Stable callbacks so the memoized DraggableBlocks only re-render when their own props change.
   const handleDropRef = useRef(handleDrop);
@@ -1535,6 +1566,9 @@ export default function GameLayout() {
     if (!isTimerRunning) setIsTimerRunning(true);
   };
   const stableHandleBlockPickup = useCallback(() => handleBlockPickupRef.current(), []);
+  const placeAtPickTargetRef = useRef(placeAtPickTarget);
+  placeAtPickTargetRef.current = placeAtPickTarget;
+  const stableHandleBlockTap = useCallback((colorIndex: number) => placeAtPickTargetRef.current(colorIndex), []);
 
   const blocks = colorGradients.map((gradient, index) => (
     interactionMode === 'pick' ? (
@@ -1557,6 +1591,7 @@ export default function GameLayout() {
         occupied={occupied}
         onDrop={stableHandleDrop}
         onPickup={stableHandleBlockPickup}
+        onTap={stableHandleBlockTap}
       />
     )
   ));
@@ -1745,8 +1780,8 @@ export default function GameLayout() {
           hoverCell={hoverCell}
           scoredCells={scoredCells}
           hint={activeHint}
-          pickTarget={interactionMode === 'pick' ? pickTargetCell : null}
-          onCellPress={interactionMode === 'pick' ? handleBoardCellPress : undefined}
+          pickTarget={pickTargetCell}
+          onCellPress={handleBoardCellPress}
         />
         {feedback && (
           <View pointerEvents="none" style={styles.feedbackCenter}>
@@ -1765,6 +1800,8 @@ export default function GameLayout() {
       >
         <View style={styles.colorBlocksRow}>{blocks}</View>
       </View>
+
+      <GameToast toast={toast} style={styles.placementToast} />
 
       <View ref={controlsRowRef} collapsable={false} style={styles.controlsRow}>
         <Pressable
@@ -2508,6 +2545,9 @@ export default function GameLayout() {
 
 const styles = StyleSheet.create({
   gestureRoot: { flex: 1 },
+  darkCounterRing: { borderWidth: 1.5, borderColor: DARK_COUNTER_OUTLINE },
+  counterRingHidden: { borderWidth: 1.5, borderColor: 'transparent' },
+  placementToast: { top: 584 },
   container: { flex: 1, alignItems: 'center' },
   background: {
     ...StyleSheet.absoluteFillObject,

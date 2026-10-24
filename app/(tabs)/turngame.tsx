@@ -2,7 +2,7 @@ import { authService } from '@/authService';
 import { ColorBlindMode, useSettings } from '@/context/SettingsContext';
 import { useThemeContext } from '@/context/ThemeContext';
 import { useSound } from '@/hooks/use-sound';
-import { DEFAULT_GAME_GRADIENTS } from '@/lib/gameColors';
+import { DARK_COUNTER_OUTLINE, DEFAULT_GAME_GRADIENTS } from '@/lib/gameColors';
 import { GRID_SIZE, NUM_COLORS, scoreNewPalindromes } from '@/lib/gameEngine';
 import { getMatch, type Match } from '@/lib/matchmaking';
 import {
@@ -45,6 +45,8 @@ import Animated, {
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NO_CELL, useBoardDrag, useBoardSharedState, type BoardGeometry } from '@/components/game/boardDrag';
 import { COLOR_BLIND_TOKENS, SkiaGameBoard } from '@/components/game/SkiaGameBoard';
+import { GameToast, useGameToast } from '@/components/game/GameToast';
+import { PLACEMENT_MESSAGES } from '@/components/game/placementMessages';
 import { AnimatedScore, ScoreFeedback } from '@/components/game/ScoreAnimations';
 
 function formatTime(ms: number): string {
@@ -178,6 +180,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
   occupied,
   onPickup,
   onDrop,
+  onTap,
   disabled,
   colorBlindEnabled,
   colorBlindMode,
@@ -192,6 +195,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
   occupied: SharedValue<number[]>;
   onPickup: () => void;
   onDrop: (row: number, col: number, colorIndex: number) => void;
+  onTap: (colorIndex: number) => void;
   disabled: boolean;
   colorBlindEnabled: boolean;
   colorBlindMode: ColorBlindMode;
@@ -199,6 +203,10 @@ const DraggableBlock = React.memo(function DraggableBlock({
   const [isDragging, setIsDragging] = useState(false);
   const blockRef = useAnimatedRef<View>();
   const canDrag = !disabled && count > 0;
+  const { theme } = useThemeContext();
+  // The border is always there (only its colour changes): on Android, adding a border to a rounded
+  // view at runtime (dark mode toggled back on) draws it with square corners.
+  const ring = theme === 'dark' ? styles.darkCounterRing : styles.counterRingHidden;
 
   const { gesture, translateStyle } = useBoardDrag({
     enabled: canDrag,
@@ -212,6 +220,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
     onPickup,
     onDrop: (row, col) => onDrop(row, col, colorIndex),
     onDraggingChange: setIsDragging,
+    onTap: () => onTap(colorIndex),
   });
 
   const token = colorBlindEnabled ? COLOR_BLIND_TOKENS[colorBlindMode][colorIndex] ?? '?' : null;
@@ -232,7 +241,7 @@ const DraggableBlock = React.memo(function DraggableBlock({
         ]}
       >
         <View style={styles.draggableScale}>
-          <LinearGradient colors={[gradient[0], gradient[1]]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.draggableGradient}>
+          <LinearGradient colors={[gradient[0], gradient[1]]} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={[styles.draggableGradient, ring]}>
             {token ? (
               <>
                 <Text style={styles.draggableTokenCount}>{count}</Text>
@@ -314,6 +323,9 @@ export default function TurnGameNative() {
   const lastMoveTime = useRef<number>(Date.now());
 
   const [pendingPlacedCell, setPendingPlacedCell] = useState<{ row: number; col: number; colorIndex: number } | null>(null);
+  // "Tap a square, then a colour" selection.
+  const [pickTargetCell, setPickTargetCell] = useState<{ row: number; col: number } | null>(null);
+  const { toast, showToast } = useGameToast();
   const [feedback, setFeedback] = useState<{ text: string; color: string; id: number } | null>(null);
   const [scoredCells, setScoredCells] = useState<string[]>([]);
   const [scoredCellsRun, setScoredCellsRun] = useState(0);
@@ -684,6 +696,7 @@ export default function TurnGameNative() {
       if (!isMyTurn || isGameOver || !matchId || !userId || !turnState || scoringInProgressRef.current) {
         playErrorSound();
         triggerHaptic('error');
+        if (!isMyTurn && !isGameOver) showToast(PLACEMENT_MESSAGES.notYourTurn);
         return;
       }
       if (colorIndex < 0 || colorIndex >= NUM_COLORS) {
@@ -694,11 +707,13 @@ export default function TurnGameNative() {
       if (board[row][col] !== null) {
         playErrorSound();
         triggerHaptic('error');
+        showToast(PLACEMENT_MESSAGES.occupied);
         return;
       }
       if (myBlocks[colorIndex] <= 0) {
         playErrorSound();
         triggerHaptic('error');
+        showToast(PLACEMENT_MESSAGES.noCounters);
         return;
       }
 
@@ -710,6 +725,7 @@ export default function TurnGameNative() {
       if (scoreDelta <= 0 && !isLastOwnBlock) {
         playErrorSound();
         triggerHaptic('error');
+        showToast(PLACEMENT_MESSAGES.noPalindrome);
         return;
       }
 
@@ -767,6 +783,7 @@ export default function TurnGameNative() {
       board,
       checkAndScore,
       hoverCell,
+      showToast,
       isGameOver,
       isMyTurn,
       matchId,
@@ -797,6 +814,42 @@ export default function TurnGameNative() {
     triggerHaptic('light');
   };
   const stableHandleBlockPickup = useCallback(() => handleBlockPickupRef.current(), []);
+
+  // Tap a square to select it (tap again to clear).
+  const handleBoardCellPress = useCallback((row: number, col: number) => {
+    if (!isMyTurn || isGameOver) {
+      if (!isGameOver) showToast(PLACEMENT_MESSAGES.notYourTurn);
+      return;
+    }
+    if (board[row]?.[col] !== null) {
+      playErrorSound();
+      triggerHaptic('error');
+      showToast(PLACEMENT_MESSAGES.occupied);
+      return;
+    }
+    setPickTargetCell((prev) => (prev?.row === row && prev?.col === col ? null : { row, col }));
+    triggerHaptic('light');
+  }, [board, isGameOver, isMyTurn, playErrorSound, showToast, triggerHaptic]);
+
+  // Then tap a colour to place it there.
+  const placeAtPickTargetRef = useRef<(colorIndex: number) => void>(() => {});
+  placeAtPickTargetRef.current = (colorIndex: number) => {
+    if (!pickTargetCell) {
+      triggerHaptic('error');
+      showToast(PLACEMENT_MESSAGES.pickSquareFirst);
+      return;
+    }
+    const target = pickTargetCell;
+    setPickTargetCell(null);
+    void handleDropRef.current(target.row, target.col, colorIndex);
+  };
+  const stableHandleBlockTap = useCallback((colorIndex: number) => placeAtPickTargetRef.current(colorIndex), []);
+
+  // Clear the selection when it gets filled or the turn passes.
+  useEffect(() => {
+    if (!pickTargetCell) return;
+    if (!isMyTurn || displayBoard[pickTargetCell.row]?.[pickTargetCell.col] !== null) setPickTargetCell(null);
+  }, [displayBoard, isMyTurn, pickTargetCell]);
 
   const handleForfeit = useCallback(async () => {
     if (!matchId || !userId) return;
@@ -892,6 +945,8 @@ export default function TurnGameNative() {
               scoredRun={scoredCellsRun}
               shimmerCells={opponentChangedCells}
               shimmerProgress={opponentShimmerProgress}
+              pickTarget={pickTargetCell}
+              onCellPress={handleBoardCellPress}
             />
 
             {/* Feedback overlay */}
@@ -902,6 +957,8 @@ export default function TurnGameNative() {
             )}
           </View>
         </View>
+
+        <GameToast toast={toast} style={styles.placementToast} />
 
         {turnNotice && (
           <View pointerEvents="none" style={styles.turnNotice}>
@@ -932,6 +989,7 @@ export default function TurnGameNative() {
               occupied={occupied}
               onPickup={stableHandleBlockPickup}
               onDrop={stableHandleDrop}
+              onTap={stableHandleBlockTap}
               disabled={!isMyTurn || isGameOver}
               colorBlindEnabled={colorBlindEnabled}
               colorBlindMode={colorBlindMode}
@@ -1292,6 +1350,9 @@ const styles = StyleSheet.create({
   },
   gestureRoot: { flex: 1 },
   draggableScale: { flex: 1 },
+  darkCounterRing: { borderWidth: 1.5, borderColor: DARK_COUNTER_OUTLINE },
+  counterRingHidden: { borderWidth: 1.5, borderColor: 'transparent' },
+  placementToast: { bottom: 170 },
   draggableGradient: {
     flex: 1,
     borderRadius: 10,

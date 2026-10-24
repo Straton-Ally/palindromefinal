@@ -22,6 +22,8 @@ import {
 import type { View } from 'react-native';
 
 export const NO_CELL = -1;
+/** Movement (points) that separates a tap on the counter from a drag. */
+const TAP_SLOP = 8;
 
 export type BoardGeometry = {
   gridSize: number;
@@ -74,6 +76,8 @@ type UseBoardDragOptions = {
   onPickup: () => void;
   onDrop: (row: number, col: number) => void;
   onDraggingChange: (dragging: boolean) => void;
+  /** Tap (no real drag) on the counter: used for "tap a square, then a colour" placement. */
+  onTap?: () => void;
 };
 
 export function useBoardDrag(options: UseBoardDragOptions) {
@@ -85,6 +89,7 @@ export function useBoardDrag(options: UseBoardDragOptions) {
   const handlePickup = useCallback(() => latest.current.onPickup(), []);
   const handleDrop = useCallback((row: number, col: number) => latest.current.onDrop(row, col), []);
   const handleDraggingChange = useCallback((dragging: boolean) => latest.current.onDraggingChange(dragging), []);
+  const handleTap = useCallback(() => latest.current.onTap?.(), []);
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -113,9 +118,17 @@ export function useBoardDrag(options: UseBoardDragOptions) {
       return row * gridSize + col;
     };
 
-    return Gesture.Pan()
+    // Tap on the counter ("tap a square, then a colour"); races the drag below.
+    const tap = Gesture.Tap()
       .enabled(enabled)
-      .minDistance(0)
+      .maxDistance(TAP_SLOP)
+      .onEnd((_e, success) => {
+        if (success) runOnJS(handleTap)();
+      });
+
+    const pan = Gesture.Pan()
+      .enabled(enabled)
+      .minDistance(TAP_SLOP)
       .onBegin((e) => {
         downX.value = e.absoluteX;
         downY.value = e.absoluteY;
@@ -162,6 +175,8 @@ export function useBoardDrag(options: UseBoardDragOptions) {
           runOnJS(handleDraggingChange)(false);
         }
       });
+
+    return Gesture.Race(pan, tap);
   }, [
     blockRef,
     cellMargin,
@@ -174,6 +189,7 @@ export function useBoardDrag(options: UseBoardDragOptions) {
     handleDraggingChange,
     handleDrop,
     handlePickup,
+    handleTap,
     hoverCell,
     hoverOnlyEmpty,
     occupied,

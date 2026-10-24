@@ -90,3 +90,9 @@ export function gradientFromHex(hex: string): GameColorGradient {
     hslToHex(h, s, l2),
   ];
 }
+
+/**
+ * Subtle light ring drawn around every counter in dark mode, so dark colours (e.g. the default
+ * black) stay visible on the navy board without any one colour looking special.
+ */
+export const DARK_COUNTER_OUTLINE = 'rgba(255,255,255,0.55)';

@@ -4,7 +4,8 @@ import { authService } from "@/authService"
 import { ColorBlindMode, useSettings } from "@/context/SettingsContext"
 import { useThemeContext } from "@/context/ThemeContext"
 import { useSound } from "@/hooks/use-sound"
-import { DEFAULT_GAME_GRADIENTS } from "@/lib/gameColors"
+import { DARK_COUNTER_OUTLINE, DEFAULT_GAME_GRADIENTS } from "@/lib/gameColors"
+import { PLACEMENT_MESSAGES } from "@/components/game/placementMessages"
 import { checkAllPalindromes, createInitialState, createSinglePlayerInitialState, type ScoringResult } from "@/lib/gameEngine"
 import { FIRST_MOVE_TIMEOUT_SECONDS, forfeitRaceMatch, getMatch, submitScore, subscribeToMatch, updateLiveScore, type Match, type MatchPlayer } from "@/lib/matchmaking"
 import { getMyBestSinglePlayer, saveSinglePlayerRun } from "@/lib/singlePlayer"
@@ -97,14 +98,19 @@ const DraggableBlock = ({
   count,
   layoutConfig,
   onDragStart,
+  onTap,
 }: {
   colorIndex: number
   gradient: readonly [string, string]
   count: number
   layoutConfig: any
   onDragStart: (colorIndex: number) => void
+  onTap: (colorIndex: number) => void
 }) => {
   const { colorBlindEnabled, colorBlindMode } = useSettings()
+  const { theme } = useThemeContext()
+  // Light ring so dark counters (e.g. black) stay visible in dark mode.
+  const ringShadow = theme === "dark" ? `inset 0 0 0 1.5px ${DARK_COUNTER_OUTLINE}` : undefined
   const [isDragging, setIsDragging] = useState(false)
   const token = colorBlindEnabled ? getColorBlindToken(colorBlindMode, colorIndex) : null
 
@@ -155,6 +161,7 @@ const DraggableBlock = ({
               display: "flex",
               justifyContent: "center",
               alignItems: "center",
+              boxShadow: ringShadow,
             }}
           >
             {token ? (
@@ -192,6 +199,7 @@ const DraggableBlock = ({
         draggable={count > 0}
         onDragStart={handleDragStart}
         onDragEnd={handleDragEnd}
+        onClick={() => { if (count > 0) onTap(colorIndex) }}
         style={{
           width: layoutConfig.colorBlock.width,
           height: layoutConfig.colorBlock.height,
@@ -218,6 +226,7 @@ const DraggableBlock = ({
             justifyContent: "center",
             alignItems: "center",
             userSelect: "none",
+            boxShadow: ringShadow,
           }}
         >
           {token ? (
@@ -1084,6 +1093,17 @@ export default function GameLayoutWeb() {
 
   // Drag State
   const [dragOverCell, setDragOverCell] = useState<{ row: number; col: number } | null>(null)
+  // "Click a square, then a colour" selection.
+  const [pickTargetCell, setPickTargetCell] = useState<{ row: number; col: number } | null>(null)
+  // Short message explaining why a counter could not be placed.
+  const [placementToast, setPlacementToast] = useState<{ id: number; text: string } | null>(null)
+  const placementToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showPlacementToast = useCallback((text: string) => {
+    if (placementToastTimerRef.current) clearTimeout(placementToastTimerRef.current)
+    setPlacementToast({ id: Date.now(), text })
+    placementToastTimerRef.current = setTimeout(() => setPlacementToast(null), 2200)
+  }, [])
+  const boardGridRef = useRef<HTMLDivElement | null>(null)
   const [, setDraggedColor] = useState<number | null>(null)
   const [activeHint, setActiveHint] = useState<{ row: number; col: number; colorIndex: number } | null>(null)
   const [wrongForcedTries, setWrongForcedTries] = useState(0)
@@ -1410,6 +1430,76 @@ export default function GameLayoutWeb() {
     return () => clearInterval(interval)
   }, [matchId, isTimerRunning, pause, scoringInProgress])
 
+  // The whole grid is the drop target: the square is taken from the pointer position, so a drop
+  // that lands on the gap between two squares still places the counter (it used to vanish).
+  const cellFromPointer = (clientX: number, clientY: number) => {
+    const el = boardGridRef.current
+    if (!el) return null
+    const rect = el.getBoundingClientRect()
+    const col = Math.floor(((clientX - rect.left) / rect.width) * gridSize)
+    const row = Math.floor(((clientY - rect.top) / rect.height) * gridSize)
+    if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) return null
+    return { row, col }
+  }
+
+  const handleBoardDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "copy"
+    const cell = cellFromPointer(e.clientX, e.clientY)
+    const next = cell && gridState[cell.row][cell.col] === null ? cell : null
+    setDragOverCell((prev) => (prev?.row === next?.row && prev?.col === next?.col ? prev : next))
+  }
+
+  const handleBoardDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDragOverCell(null)
+  }
+
+  const handleBoardDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    const cell = cellFromPointer(e.clientX, e.clientY)
+    if (!cell) {
+      e.preventDefault()
+      setDragOverCell(null)
+      setDraggedColor(null)
+      return
+    }
+    void handleDrop(e, cell.row, cell.col)
+  }
+
+  // Click a square to select it (click again to clear)...
+  const handleCellClick = (row: number, col: number) => {
+    if (gridState[row][col] !== null) {
+      playErrorSound()
+      triggerHaptic([0, 30, 20, 30])
+      showPlacementToast(PLACEMENT_MESSAGES.occupied)
+      return
+    }
+    setPickTargetCell((prev) => (prev?.row === row && prev?.col === col ? null : { row, col }))
+    triggerHaptic(10)
+  }
+
+  // ...then click a colour to place it there.
+  const placeAtPickTarget = (colorIndex: number) => {
+    if (!pickTargetCell) {
+      triggerHaptic([0, 30, 20, 30])
+      showPlacementToast(PLACEMENT_MESSAGES.pickSquareFirst)
+      return
+    }
+    playPickupSound()
+    if (!isTimerRunning) setIsTimerRunning(true)
+    // The selection clears itself once the square is filled; a rejected move keeps it for another try.
+    void placeCounter(pickTargetCell.row, pickTargetCell.col, colorIndex)
+  }
+
+  // A drag that fills the selected square clears the selection.
+  useEffect(() => {
+    if (pickTargetCell && gridState[pickTargetCell.row]?.[pickTargetCell.col] !== null) setPickTargetCell(null)
+  }, [gridState, pickTargetCell])
+
+  useEffect(() => () => {
+    if (placementToastTimerRef.current) clearTimeout(placementToastTimerRef.current)
+  }, [])
+
   const handleDragStart = (colorIndex: number) => {
     playPickupSound()
     triggerHaptic(10)
@@ -1419,38 +1509,10 @@ export default function GameLayoutWeb() {
     }
   }
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>, row: number, col: number) => {
-    e.preventDefault()
-    e.dataTransfer.dropEffect = "copy"
-
-    // Only highlight if empty
-    if (gridState[row][col] === null) {
-      setDragOverCell({ row, col })
-    } else {
-      setDragOverCell(null)
-    }
-  }
-
-  const handleDragEnter = (e: React.DragEvent<HTMLDivElement>, row: number, col: number) => {
-    e.preventDefault()
-    if (gridState[row][col] === null) {
-      setDragOverCell({ row, col })
-    }
-  }
-
-  const handleDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault()
-    // We clear dragOverCell only if we are leaving the currently highlighted cell?
-    // Or just clear it. But since enter/leave bubble, it's safer to rely on Enter/Over updates.
-    // However, if we leave a cell, we should clear it *if* it matches.
-    setDragOverCell(null)
-  }
-
   const handleDrop = async (e: React.DragEvent<HTMLDivElement>, row: number, col: number): Promise<boolean> => {
     e.preventDefault()
     setDragOverCell(null)
     setDraggedColor(null)
-    if (pause || settingsVisible || gameOver || scoringInProgressRef.current) return false
 
     const transferredColor = e.dataTransfer.getData("color")
     if (!transferredColor) {
@@ -1459,7 +1521,12 @@ export default function GameLayoutWeb() {
       return false
     }
 
-    const colorIndex = parseInt(transferredColor, 10)
+    return placeCounter(row, col, parseInt(transferredColor, 10))
+  }
+
+  // Places a counter (drag-and-drop and click-to-place both end up here).
+  const placeCounter = async (row: number, col: number, colorIndex: number): Promise<boolean> => {
+    if (pause || settingsVisible || gameOver || scoringInProgressRef.current) return false
 
     if (isNaN(colorIndex) || colorIndex < 0 || colorIndex >= colorGradients.length) {
       playErrorSound()
@@ -1470,12 +1537,14 @@ export default function GameLayoutWeb() {
     if (gridState[row][col] !== null) {
       playErrorSound()
       triggerHaptic([0, 30, 20, 30])
+      showPlacementToast(PLACEMENT_MESSAGES.occupied)
       return false
     }
 
     if (blockCounts[colorIndex] <= 0) {
       playErrorSound()
       triggerHaptic([0, 30, 20, 30])
+      showPlacementToast(PLACEMENT_MESSAGES.noCounters)
       return false
     }
 
@@ -1522,6 +1591,7 @@ export default function GameLayoutWeb() {
         setGridState(revertedGrid)
         setBlockCounts(revertedCounts)
         setFirstMovePlacements([])
+        showPlacementToast(PLACEMENT_MESSAGES.firstMove)
 
         const nextWrongTries = wrongForcedTriesRef.current + 1
         const nextValue = nextWrongTries >= 3 ? 0 : nextWrongTries
@@ -1605,6 +1675,7 @@ export default function GameLayoutWeb() {
 
         playErrorSound()
         triggerHaptic([0, 30, 20, 30])
+        showPlacementToast(PLACEMENT_MESSAGES.noPalindrome)
 
         if (nextWrongTries >= 3) {
           if (hints > 0) {
@@ -2131,7 +2202,26 @@ export default function GameLayoutWeb() {
             </div>
           </div>
         ) : null}
+        {placementToast && (
+          <div
+            key={placementToast.id}
+            role="status"
+            style={{
+              position: "fixed", left: "50%", bottom: 28, transform: "translateX(-50%)", zIndex: 10000,
+              maxWidth: "min(92vw, 460px)", padding: "10px 16px", borderRadius: 14,
+              background: "rgba(17,17,17,0.92)", color: "#FFFFFF", fontFamily: "Geist-Regular, system-ui",
+              fontWeight: 700, fontSize: 14, textAlign: "center", pointerEvents: "none",
+              boxShadow: "0 10px 30px rgba(0,0,0,0.35)", animation: "placementToastIn 180ms ease-out",
+            }}
+          >
+            {placementToast.text}
+          </div>
+        )}
         <style>{`
+          @keyframes placementToastIn {
+            from { opacity: 0; transform: translate(-50%, 8px); }
+            to { opacity: 1; transform: translate(-50%, 0); }
+          }
           * { box-sizing: border-box; }
           @keyframes popIn {
             0% { transform: scale(0); opacity: 0; }
@@ -2298,7 +2388,7 @@ export default function GameLayoutWeb() {
               }}>
                 {colorGradients.map((gradient, i) => (
                   <DraggableBlock key={`left-${i}`} colorIndex={i} gradient={gradient}
-                    count={blockCounts[i]} layoutConfig={layoutConfig} onDragStart={handleDragStart} />
+                    count={blockCounts[i]} layoutConfig={layoutConfig} onDragStart={handleDragStart} onTap={placeAtPickTarget} />
                 ))}
               </div>
             </div>
@@ -2352,7 +2442,13 @@ export default function GameLayoutWeb() {
                 </div>
               )}
 
-              <div style={{ display: "flex", flexDirection: "column" }}>
+              <div
+                ref={boardGridRef}
+                onDragOver={handleBoardDragOver}
+                onDragLeave={handleBoardDragLeave}
+                onDrop={handleBoardDrop}
+                style={{ display: "flex", flexDirection: "column" }}
+              >
                 {Array.from({ length: gridSize }, (_, row) => (
                   <div key={row} style={{ display: "flex", flexDirection: "row" }}>
                     {Array.from({ length: gridSize }, (_, col) => {
@@ -2376,6 +2472,13 @@ export default function GameLayoutWeb() {
                         position: "relative", boxShadow: "inset 0 2px 4px rgba(0,0,0,0.05)",
                       }
                       const isHint = activeHint?.row === row && activeHint?.col === col
+                      const isPick = pickTargetCell?.row === row && pickTargetCell?.col === col
+                      if (isPick && !isHovered) {
+                        cellStyle.backgroundColor = theme === "dark" ? "rgba(100, 200, 255, 0.25)" : "rgba(100, 200, 255, 0.18)"
+                        cellStyle.borderColor = "#4A9EFF"
+                        cellStyle.borderWidth = 2
+                      }
+                      if (cellColorIndex === null) cellStyle.cursor = "pointer"
                       const isScored = scoredCells.includes(`${row},${col}`)
                       const scoreIndex = isScored ? scoredCells.indexOf(`${row},${col}`) : 0
                       const scorePulseName = scoredCellsRun % 2 === 0 ? "scorePulse" : "scorePulseAlt"
@@ -2401,10 +2504,7 @@ export default function GameLayoutWeb() {
                       }
                       return (
                         <div key={col}
-                          onDragOver={(e) => handleDragOver(e, row, col)}
-                          onDragEnter={(e) => handleDragEnter(e, row, col)}
-                          onDragLeave={(e) => handleDragLeave(e)}
-                          onDrop={(e) => handleDrop(e, row, col)}
+                          onClick={() => handleCellClick(row, col)}
                           style={cellStyle}
                         >
                           {cellColorIndex !== null && (
@@ -2412,7 +2512,9 @@ export default function GameLayoutWeb() {
                               width: "100%", height: "100%", borderRadius: 6,
                               background: `linear-gradient(to right bottom, ${colorGradients[cellColorIndex][0]}, ${colorGradients[cellColorIndex][1]})`,
                               position: "absolute", top: 0, left: 0, zIndex: 0,
-                              boxShadow: "0 2px 5px rgba(0,0,0,0.2)",
+                              boxShadow: theme === "dark"
+                                ? `inset 0 0 0 1.5px ${DARK_COUNTER_OUTLINE}, 0 2px 5px rgba(0,0,0,0.2)`
+                                : "0 2px 5px rgba(0,0,0,0.2)",
                               transformOrigin: "center",
                               animation: isScored ? `${scoredBlockZoomName} 0.8s ease-out ${scoreIndex * 0.15}s both` : undefined,
                             }} />
@@ -2422,6 +2524,7 @@ export default function GameLayoutWeb() {
                               position: "absolute", top: 0, left: 0, right: 0, bottom: 0,
                               background: `linear-gradient(to right bottom, ${colorGradients[activeHint.colorIndex][0]}, ${colorGradients[activeHint.colorIndex][1]})`,
                               borderRadius: 6, animation: "pulse 1.5s infinite", zIndex: 1,
+                              boxShadow: theme === "dark" ? `inset 0 0 0 1.5px ${DARK_COUNTER_OUTLINE}` : undefined,
                             }} />
                           )}
                           {isScored && (
@@ -2482,7 +2585,7 @@ export default function GameLayoutWeb() {
               }}>
                 {colorGradients.map((gradient, i) => (
                   <DraggableBlock key={`bot-${i}`} colorIndex={i} gradient={gradient}
-                    count={blockCounts[i]} layoutConfig={layoutConfig} onDragStart={handleDragStart} />
+                    count={blockCounts[i]} layoutConfig={layoutConfig} onDragStart={handleDragStart} onTap={placeAtPickTarget} />
                 ))}
               </div>
             )}

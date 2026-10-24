@@ -46,6 +46,7 @@ import Animated, {
 } from 'react-native-reanimated';
 
 import type { ColorBlindMode } from '@/context/SettingsContext';
+import { DARK_COUNTER_OUTLINE } from '@/lib/gameColors';
 import { NO_CELL, boardPixelSize, type BoardGeometry } from './boardDrag';
 
 const WORD = 'PALINDROME®';
@@ -157,6 +158,8 @@ type CellContentProps = CellBox & {
   tokenCorner: SkParagraph | null;
   hintToken: SkParagraph | null;
   outline: 'none' | 'scored' | 'hint' | 'pick';
+  /** Light ring around a dark counter in dark mode (null = none). */
+  counterOutline: string | null;
 };
 
 /** Everything drawn above the hover highlight for one cell. */
@@ -179,6 +182,10 @@ const CellContent = memo(function CellContent(props: CellContentProps) {
       </RoundedRect>
     );
   }
+  const counterRing =
+    fillA && fillB && props.counterOutline ? (
+      <RoundedRect x={x + 1.75} y={y + 1.75} width={w - 3.5} height={h - 3.5} r={r - 1.5} color={props.counterOutline} style="stroke" strokeWidth={1.5} />
+    ) : null;
 
   const hint =
     hintA && hintB ? (
@@ -248,6 +255,7 @@ const CellContent = memo(function CellContent(props: CellContentProps) {
   return (
     <>
       {fill}
+      {counterRing}
       {hint}
       {bulldog}
       {letter}
@@ -278,11 +286,12 @@ type ScoredFxProps = CellBox & {
   isTurn: boolean;
   fillA: string | null;
   fillB: string | null;
+  counterOutline: string | null;
 };
 
 /** Glow + zooming block + brightness flash + shimmer sweep for one scored tile (drawn under its letter). */
 const ScoredFx = memo(function ScoredFx(props: ScoredFxProps) {
-  const { x, y, w, h, r, index, clock, isTurn, fillA, fillB } = props;
+  const { x, y, w, h, r, index, clock, isTurn, fillA, fillB, counterOutline } = props;
   const cx = x + w / 2;
   const cy = y + h / 2;
   const p = useTileProgress(clock, index);
@@ -315,6 +324,9 @@ const ScoredFx = memo(function ScoredFx(props: ScoredFxProps) {
             <LinearGradient start={gradStart} end={gradEnd} colors={[fillA, fillB]} />
           </RoundedRect>
           <RoundedRect x={x + 1} y={y + 1} width={w - 2} height={h - 2} r={r - 1} color="#FFFFFF" opacity={brightness} />
+          {counterOutline ? (
+            <RoundedRect x={x + 1.75} y={y + 1.75} width={w - 3.5} height={h - 3.5} r={r - 1.5} color={counterOutline} style="stroke" strokeWidth={1.5} />
+          ) : null}
         </Group>
       ) : null}
       <Group clip={rrect(rect(x, y, w, h), r, r)}>
@@ -347,8 +359,8 @@ const ScoredBorder = memo(function ScoredBorder(props: CellBox & { index: number
 });
 
 /** Hint preview that breathes like the web game (opacity 0.3 > 0.72, scale 0.95 > 1.05, 1.5 s loop). */
-const HintFx = memo(function HintFx(props: CellBox & { hintA: string; hintB: string }) {
-  const { x, y, w, h, r, hintA, hintB } = props;
+const HintFx = memo(function HintFx(props: CellBox & { hintA: string; hintB: string; counterOutline: string | null }) {
+  const { x, y, w, h, r, hintA, hintB, counterOutline } = props;
   const cx = x + w / 2;
   const cy = y + h / 2;
   const pulse = useSharedValue(0);
@@ -364,6 +376,9 @@ const HintFx = memo(function HintFx(props: CellBox & { hintA: string; hintB: str
       <RoundedRect x={x + 1} y={y + 1} width={w - 2} height={h - 2} r={r - 1}>
         <LinearGradient start={vec(cx, y)} end={vec(cx, y + h)} colors={[hintA, hintB]} />
       </RoundedRect>
+      {counterOutline ? (
+        <RoundedRect x={x + 1.75} y={y + 1.75} width={w - 3.5} height={h - 3.5} r={r - 1.5} color={counterOutline} style="stroke" strokeWidth={1.5} />
+      ) : null}
     </Group>
   );
 });
@@ -450,10 +465,11 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
       const scoredIndex = scoredMap.get(key);
       const isScored = scoredIndex !== undefined;
       const isHint = !isTurn && hint?.row === row && hint?.col === col;
-      const isPick = !isTurn && pickTarget?.row === row && pickTarget?.col === col;
+      const isPick = pickTarget?.row === row && pickTarget?.col === col;
       const gradient = colorIndex !== null ? gradients[colorIndex] : undefined;
       const hintGradient = isHint && hint ? gradients[hint.colorIndex] : undefined;
       const outline = isScored ? 'scored' : isHint ? 'hint' : isPick ? 'pick' : 'none';
+      const counterOutline = isDark && gradient ? DARK_COUNTER_OUTLINE : null;
 
       bases.push(
         <CellBase
@@ -475,7 +491,19 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
       }
 
       if (hintGradient) {
-        contents.push(<HintFx key={`hfx${key}`} x={x} y={y} w={cw} h={ch} r={radius} hintA={hintGradient[0]} hintB={hintGradient[1]} />);
+        contents.push(
+          <HintFx
+            key={`hfx${key}`}
+            x={x}
+            y={y}
+            w={cw}
+            h={ch}
+            r={radius}
+            hintA={hintGradient[0]}
+            hintB={hintGradient[1]}
+            counterOutline={isDark ? DARK_COUNTER_OUTLINE : null}
+          />
+        );
       }
       if (isScored) {
         scoredFx.push(
@@ -491,6 +519,7 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
             isTurn={isTurn}
             fillA={gradient ? gradient[0] : null}
             fillB={gradient ? gradient[1] : null}
+            counterOutline={counterOutline}
           />
         );
         scoredBorders.push(<ScoredBorder key={`sb${key}`} x={x} y={y} w={cw} h={ch} r={radius} index={scoredIndex} clock={scoreClock} />);
@@ -526,6 +555,7 @@ function SkiaGameBoardImpl(props: SkiaGameBoardProps) {
           }
           hintToken={tokenParagraphs && isHint && hint ? tokenParagraphs.center[hint.colorIndex] ?? null : null}
           outline={isScored ? 'none' : outline}
+          counterOutline={isScored ? null : counterOutline}
         />
       );
     }

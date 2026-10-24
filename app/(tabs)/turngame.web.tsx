@@ -4,7 +4,8 @@ import { authService } from "@/authService"
 import { ColorBlindMode, useSettings } from "@/context/SettingsContext"
 import { useThemeContext } from "@/context/ThemeContext"
 import { useSound } from "@/hooks/use-sound"
-import { DEFAULT_GAME_GRADIENTS } from "@/lib/gameColors"
+import { DARK_COUNTER_OUTLINE, DEFAULT_GAME_GRADIENTS } from "@/lib/gameColors"
+import { PLACEMENT_MESSAGES } from "@/components/game/placementMessages"
 import { GRID_SIZE, NUM_COLORS, scoreNewPalindromes } from "@/lib/gameEngine"
 import {
   getTurnMatchState, initTurnBoard, submitTurnMove,
@@ -87,11 +88,13 @@ function getGameOverReason(info: GameOverInfo, userId: string | null): string {
 }
 
 // ── Draggable Block ─────────────────────────────────────
-function DraggableBlock({ colorIndex, gradient, count, layoutConfig, onDragStart, disabled }: {
+function DraggableBlock({ colorIndex, gradient, count, layoutConfig, onDragStart, onTap, disabled }: {
   colorIndex: number; gradient: readonly [string, string]; count: number
-  layoutConfig: any; onDragStart: (c: number) => void; disabled: boolean
+  layoutConfig: any; onDragStart: (c: number) => void; onTap: (c: number) => void; disabled: boolean
 }) {
   const { colorBlindEnabled, colorBlindMode } = useSettings()
+  const { theme } = useThemeContext()
+  const ringShadow = theme === "dark" ? `inset 0 0 0 1.5px ${DARK_COUNTER_OUTLINE}` : undefined
   const token = colorBlindEnabled ? COLOR_BLIND_TOKENS[colorBlindMode][colorIndex] ?? "?" : null
   const canDrag = count > 0 && !disabled
 
@@ -99,12 +102,14 @@ function DraggableBlock({ colorIndex, gradient, count, layoutConfig, onDragStart
     <div
       draggable={canDrag}
       onDragStart={(e) => { if (canDrag) { e.dataTransfer.setData("color", colorIndex.toString()); e.dataTransfer.effectAllowed = "copy"; onDragStart(colorIndex) } else e.preventDefault() }}
+      onClick={() => { if (canDrag) onTap(colorIndex) }}
       style={{
         width: layoutConfig.colorBlock.width, height: layoutConfig.colorBlock.height,
         borderRadius: 10, position: "relative", display: "flex", justifyContent: "center", alignItems: "center",
         opacity: canDrag ? 1 : 0.35, cursor: canDrag ? "grab" : "not-allowed",
         background: `linear-gradient(to right bottom, ${gradient[0]}, ${gradient[1]})`,
         userSelect: "none", fontFamily: "Geist-Regular, system-ui",
+        boxShadow: ringShadow,
       }}
     >
       {token && <span style={{ position: "absolute", top: 4, left: 6, color: "#fff", fontWeight: "700", fontSize: 12, userSelect: "none" }}>{count}</span>}
@@ -181,6 +186,17 @@ export default function TurnGameWeb() {
   const lastMoveTime = useRef<number>(Date.now())
 
   const [dragOverCell, setDragOverCell] = useState<{ row: number; col: number } | null>(null)
+  // "Click a square, then a colour" selection.
+  const [pickTargetCell, setPickTargetCell] = useState<{ row: number; col: number } | null>(null)
+  // Short message explaining why a counter could not be placed.
+  const [placementToast, setPlacementToast] = useState<{ id: number; text: string } | null>(null)
+  const placementToastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const showPlacementToast = useCallback((text: string) => {
+    if (placementToastTimerRef.current) clearTimeout(placementToastTimerRef.current)
+    setPlacementToast({ id: Date.now(), text })
+    placementToastTimerRef.current = setTimeout(() => setPlacementToast(null), 2200)
+  }, [])
+  const boardGridRef = useRef<HTMLDivElement | null>(null)
   const [pendingPlacedCell, setPendingPlacedCell] = useState<{ row: number; col: number; colorIndex: number } | null>(null)
   const [feedback, setFeedback] = useState<{ text: string; color: string; id: number } | null>(null)
   const [scoredCells, setScoredCells] = useState<string[]>([])
@@ -437,16 +453,97 @@ export default function TurnGameWeb() {
     }, ms)
   })
 
+  // Clear the selection when it gets filled or the turn passes.
+  useEffect(() => {
+    if (!pickTargetCell) return
+    const filled = (pendingPlacedCell?.row === pickTargetCell.row && pendingPlacedCell?.col === pickTargetCell.col)
+      || board[pickTargetCell.row]?.[pickTargetCell.col] != null
+    if (!isMyTurn || filled) setPickTargetCell(null)
+  }, [board, isMyTurn, pendingPlacedCell, pickTargetCell])
+
+  useEffect(() => () => {
+    if (placementToastTimerRef.current) clearTimeout(placementToastTimerRef.current)
+  }, [])
+
+  // The whole grid is the drop target: the square is taken from the pointer position, so a drop
+  // on the gap between two squares still places the counter.
+  const cellFromPointer = (clientX: number, clientY: number) => {
+    const el = boardGridRef.current
+    if (!el) return null
+    const rect = el.getBoundingClientRect()
+    const col = Math.floor(((clientX - rect.left) / rect.width) * gridSize)
+    const row = Math.floor(((clientY - rect.top) / rect.height) * gridSize)
+    if (row < 0 || row >= gridSize || col < 0 || col >= gridSize) return null
+    return { row, col }
+  }
+
+  const handleBoardDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = "copy"
+    const cell = cellFromPointer(e.clientX, e.clientY)
+    const next = cell && board[cell.row][cell.col] === null ? cell : null
+    setDragOverCell((prev) => (prev?.row === next?.row && prev?.col === next?.col ? prev : next))
+  }
+
+  const handleBoardDragLeave = (e: React.DragEvent<HTMLDivElement>) => {
+    if (e.currentTarget.contains(e.relatedTarget as Node | null)) return
+    setDragOverCell(null)
+  }
+
+  const handleBoardDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    const cell = cellFromPointer(e.clientX, e.clientY)
+    if (!cell) {
+      e.preventDefault()
+      setDragOverCell(null)
+      return
+    }
+    void handleDrop(e, cell.row, cell.col)
+  }
+
+  // Click a square to select it (click again to clear)...
+  const handleCellClick = (row: number, col: number) => {
+    if (!isMyTurn || isGameOver) {
+      if (!isGameOver) showPlacementToast(PLACEMENT_MESSAGES.notYourTurn)
+      return
+    }
+    if (board[row][col] !== null) {
+      playErrorSound()
+      showPlacementToast(PLACEMENT_MESSAGES.occupied)
+      return
+    }
+    setPickTargetCell((prev) => (prev?.row === row && prev?.col === col ? null : { row, col }))
+  }
+
+  // ...then click a colour to place it there.
+  const placeAtPickTarget = (colorIndex: number) => {
+    if (!pickTargetCell) {
+      showPlacementToast(PLACEMENT_MESSAGES.pickSquareFirst)
+      return
+    }
+    const target = pickTargetCell
+    setPickTargetCell(null)
+    playPickupSound()
+    void placeTurnCounter(target.row, target.col, colorIndex)
+  }
+
   // ── Handle drop ──
   const handleDrop = async (e: React.DragEvent<HTMLDivElement>, row: number, col: number) => {
     e.preventDefault()
     setDragOverCell(null)
-    if (!isMyTurn || isGameOver || !matchId || !userId || !turnState || scoringInProgressRef.current) { playErrorSound(); return }
+    await placeTurnCounter(row, col, parseInt(e.dataTransfer.getData("color"), 10))
+  }
 
-    const colorIndex = parseInt(e.dataTransfer.getData("color"), 10)
+  // Places a counter (drag-and-drop and click-to-place both end up here).
+  const placeTurnCounter = async (row: number, col: number, colorIndex: number) => {
+    if (!isMyTurn || isGameOver || !matchId || !userId || !turnState || scoringInProgressRef.current) {
+      playErrorSound()
+      if (!isMyTurn && !isGameOver) showPlacementToast(PLACEMENT_MESSAGES.notYourTurn)
+      return
+    }
+
     if (isNaN(colorIndex) || colorIndex < 0 || colorIndex >= NUM_COLORS) { playErrorSound(); return }
-    if (board[row][col] !== null) { playErrorSound(); return }
-    if (myBlocks[colorIndex] <= 0) { playErrorSound(); return }
+    if (board[row][col] !== null) { playErrorSound(); showPlacementToast(PLACEMENT_MESSAGES.occupied); return }
+    if (myBlocks[colorIndex] <= 0) { playErrorSound(); showPlacementToast(PLACEMENT_MESSAGES.noCounters); return }
 
     // Client-side scoring check
     const tempGrid = board.map(r => [...r])
@@ -456,6 +553,7 @@ export default function TurnGameWeb() {
 
     if (scoreDelta <= 0 && !isLastOwnBlock) {
       playErrorSound()
+      showPlacementToast(PLACEMENT_MESSAGES.noPalindrome)
       return
     }
 
@@ -603,7 +701,23 @@ export default function TurnGameWeb() {
         </div>
       )}
 
+      {placementToast && (
+        <div
+          key={placementToast.id}
+          role="status"
+          style={{
+            position: "fixed", left: "50%", bottom: 28, transform: "translateX(-50%)", zIndex: 10000,
+            maxWidth: "min(92vw, 460px)", padding: "10px 16px", borderRadius: 14,
+            background: "rgba(17,17,17,0.92)", color: "#FFFFFF", fontFamily: "Geist-Regular, system-ui",
+            fontWeight: 700, fontSize: 14, textAlign: "center", pointerEvents: "none",
+            boxShadow: "0 10px 30px rgba(0,0,0,0.35)", animation: "placementToastIn 180ms ease-out",
+          }}
+        >
+          {placementToast.text}
+        </div>
+      )}
       <style>{`
+        @keyframes placementToastIn { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
         * { box-sizing: border-box; }
         @keyframes popIn { 0% { transform: scale(0); opacity: 0; } 50% { transform: scale(1.2); opacity: 1; } 100% { transform: scale(1); opacity: 1; } }
         @keyframes floatUp { 0% { transform: translateY(0); opacity: 1; } 100% { transform: translateY(-60px); opacity: 0; } }
@@ -633,7 +747,7 @@ export default function TurnGameWeb() {
           <div style={{ width: layoutConfig.leftPanelW, flexShrink: 0, display: "flex", flexDirection: "column", gap: 10, justifyContent: "center", alignItems: "center", paddingRight: 8 }}>
             <PlayerCard name={myName} avatar={myAvatar} score={myScore} timeMs={myTimeMs} isActive={isMyTurn} isYou={true} theme={theme} colors={colors} />
             <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, padding: "12px 8px", borderRadius: 16, background: isDark ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.85)", border: isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.07)", width: "100%", opacity: isMyTurn ? 1 : 0.5, transition: "opacity 0.3s" }}>
-              {colorGradients.map((g, i) => <DraggableBlock key={i} colorIndex={i} gradient={g} count={myBlocks[i]} layoutConfig={layoutConfig} onDragStart={playPickupSound} disabled={!isMyTurn || isGameOver} />)}
+              {colorGradients.map((g, i) => <DraggableBlock key={i} colorIndex={i} gradient={g} count={myBlocks[i]} layoutConfig={layoutConfig} onDragStart={playPickupSound} onTap={placeAtPickTarget} disabled={!isMyTurn || isGameOver} />)}
             </div>
           </div>
         )}
@@ -667,7 +781,13 @@ export default function TurnGameWeb() {
                 <span style={{ fontSize: 16, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,0.5)", padding: "8px 20px", borderRadius: 12 }}>Opponent&apos;s turn...</span>
               </div>
             )}
-            <div style={{ display: "flex", flexDirection: "column" }}>
+            <div
+              ref={boardGridRef}
+              onDragOver={handleBoardDragOver}
+              onDragLeave={handleBoardDragLeave}
+              onDrop={handleBoardDrop}
+              style={{ display: "flex", flexDirection: "column" }}
+            >
               {Array.from({ length: gridSize }, (_, row) => (
                 <div key={row} style={{ display: "flex", flexDirection: "row" }}>
                   {Array.from({ length: gridSize }, (_, col) => {
@@ -693,17 +813,17 @@ export default function TurnGameWeb() {
                       transition: "all 0.15s", position: "relative", boxShadow: "inset 0 2px 4px rgba(0,0,0,0.05)",
                     }
                     if (isHovered) { cellStyle.backgroundColor = isDark ? "rgba(100,200,255,0.4)" : "rgba(100,200,255,0.3)"; cellStyle.borderColor = isDark ? "rgba(100,200,255,0.8)" : "rgba(50,150,255,0.6)"; cellStyle.transform = "scale(1.05)" }
+                    const isPick = pickTargetCell?.row === row && pickTargetCell?.col === col
+                    if (isPick && !isHovered) { cellStyle.backgroundColor = isDark ? "rgba(100,200,255,0.25)" : "rgba(100,200,255,0.18)"; cellStyle.borderColor = "#4A9EFF"; cellStyle.borderWidth = 2 }
+                    if (cellColor === null && isMyTurn && !isGameOver) cellStyle.cursor = "pointer"
                     if (isScored) { cellStyle.borderColor = "rgba(255,215,0,0.95)"; cellStyle.borderWidth = 2; cellStyle.animation = `${scorePulseName} 0.8s ease-out ${scoreIndex * 0.15}s both` }
 
                     return (
                       <div key={col}
-                        onDragOver={(e) => { e.preventDefault(); if (board[row][col] === null) setDragOverCell({ row, col }); else setDragOverCell(null) }}
-                        onDragEnter={(e) => { e.preventDefault(); if (board[row][col] === null) setDragOverCell({ row, col }) }}
-                        onDragLeave={() => setDragOverCell(null)}
-                        onDrop={(e) => handleDrop(e, row, col)}
+                        onClick={() => handleCellClick(row, col)}
                         style={cellStyle}
                       >
-                        {cellColor !== null && <div style={{ width: "100%", height: "100%", borderRadius: 6, background: `linear-gradient(to right bottom, ${colorGradients[cellColor][0]}, ${colorGradients[cellColor][1]})`, position: "absolute", top: 0, left: 0, boxShadow: "0 2px 5px rgba(0,0,0,0.2)", transformOrigin: "center", animation: isScored ? `${scoredBlockZoomName} 0.8s ease-out ${scoreIndex * 0.15}s both` : undefined }} />}
+                        {cellColor !== null && <div style={{ width: "100%", height: "100%", borderRadius: 6, background: `linear-gradient(to right bottom, ${colorGradients[cellColor][0]}, ${colorGradients[cellColor][1]})`, position: "absolute", top: 0, left: 0, boxShadow: isDark ? `inset 0 0 0 1.5px ${DARK_COUNTER_OUTLINE}, 0 2px 5px rgba(0,0,0,0.2)` : "0 2px 5px rgba(0,0,0,0.2)", transformOrigin: "center", animation: isScored ? `${scoredBlockZoomName} 0.8s ease-out ${scoreIndex * 0.15}s both` : undefined }} />}
                         {isScored && (
                           <div style={{ position: "absolute", inset: 0, borderRadius: 6, overflow: "hidden", zIndex: 1, pointerEvents: "none" }}>
                             <div style={{
@@ -742,7 +862,7 @@ export default function TurnGameWeb() {
           {/* Mobile: blocks below board */}
           {layoutConfig.leftPanelW === 0 && (
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "center", gap: 8, padding: "8px 16px", background: isDark ? "rgba(255,255,255,0.07)" : "rgba(255,255,255,0.8)", borderRadius: 18, opacity: isMyTurn ? 1 : 0.5, maxWidth: layoutConfig.boardSize }}>
-              {colorGradients.map((g, i) => <DraggableBlock key={i} colorIndex={i} gradient={g} count={myBlocks[i]} layoutConfig={layoutConfig} onDragStart={playPickupSound} disabled={!isMyTurn || isGameOver} />)}
+              {colorGradients.map((g, i) => <DraggableBlock key={i} colorIndex={i} gradient={g} count={myBlocks[i]} layoutConfig={layoutConfig} onDragStart={playPickupSound} onTap={placeAtPickTarget} disabled={!isMyTurn || isGameOver} />)}
             </div>
           )}
         </div>
