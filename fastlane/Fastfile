@@ -28,7 +28,23 @@ platform :ios do
 
     # Downloads (or creates) the App Store provisioning profile for the
     # distribution certificate imported above.
-    sigh(api_key: api_key, app_identifier: APP_IDENTIFIER, team_id: ENV.fetch("APPLE_TEAM_ID"))
+    # Apple's "list profiles" endpoint intermittently returns HTTP 500
+    # (fastlane/fastlane#21199). Retry, then fall back to creating a fresh
+    # profile without listing (skip_fetch_profiles).
+    sigh_options = { api_key: api_key, app_identifier: APP_IDENTIFIER, team_id: ENV.fetch("APPLE_TEAM_ID") }
+    attempts = 0
+    begin
+      attempts += 1
+      sigh(**sigh_options)
+    rescue => e
+      if attempts < 3
+        UI.important("sigh failed (#{e.message.lines.first&.strip}); retrying in 20s (attempt #{attempts + 1}/3)")
+        sleep(20)
+        retry
+      end
+      UI.important("Profile listing keeps failing; creating a new App Store profile instead")
+      sigh(**sigh_options, skip_fetch_profiles: true)
+    end
     profile_name = lane_context[SharedValues::SIGH_NAME]
 
     # Build number = latest TestFlight build + 1, so reruns never collide.
