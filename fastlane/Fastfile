@@ -1,0 +1,71 @@
+default_platform(:ios)
+
+APP_IDENTIFIER = "com.gammagames.palindrome"
+XCODEPROJ      = "ios/Palindrome.xcodeproj"
+WORKSPACE      = "ios/Palindrome.xcworkspace"
+SCHEME         = "Palindrome"
+INFO_PLIST     = "ios/Palindrome/Info.plist"
+
+platform :ios do
+  desc "Build a signed release and upload it to TestFlight (runs on GitHub Actions macOS)"
+  lane :release do
+    api_key = app_store_connect_api_key(
+      key_id: ENV.fetch("ASC_KEY_ID"),
+      issuer_id: ENV.fetch("ASC_ISSUER_ID"),
+      key_content: ENV.fetch("ASC_API_KEY_P8"),
+      in_house: false
+    )
+
+    # Temporary keychain (only acts when CI=true, which GitHub sets).
+    setup_ci
+
+    import_certificate(
+      certificate_path: ENV.fetch("DIST_CERT_PATH"),
+      certificate_password: ENV.fetch("IOS_DIST_CERT_PASSWORD"),
+      keychain_name: "fastlane_tmp_keychain",
+      keychain_password: ""
+    )
+
+    # Downloads (or creates) the App Store provisioning profile for the
+    # distribution certificate imported above.
+    sigh(api_key: api_key, app_identifier: APP_IDENTIFIER, team_id: ENV.fetch("APPLE_TEAM_ID"))
+    profile_name = lane_context[SharedValues::SIGH_NAME]
+
+    # Build number = latest TestFlight build + 1, so reruns never collide.
+    build_number = latest_testflight_build_number(
+      api_key: api_key,
+      app_identifier: APP_IDENTIFIER,
+      initial_build_number: 0
+    ) + 1
+    set_info_plist_value(path: INFO_PLIST, key: "CFBundleVersion", value: build_number.to_s)
+    UI.message("Using build number #{build_number}")
+
+    # Manual signing on the app target only (Pods stay untouched).
+    update_code_signing_settings(
+      path: XCODEPROJ,
+      targets: [SCHEME],
+      use_automatic_signing: false,
+      team_id: ENV.fetch("APPLE_TEAM_ID"),
+      code_sign_identity: "Apple Distribution",
+      profile_name: profile_name
+    )
+
+    build_app(
+      workspace: WORKSPACE,
+      scheme: SCHEME,
+      configuration: "Release",
+      export_method: "app-store",
+      output_directory: "build",
+      output_name: "Palindrome.ipa",
+      export_options: {
+        provisioningProfiles: { APP_IDENTIFIER => profile_name }
+      }
+    )
+
+    upload_to_testflight(
+      api_key: api_key,
+      app_identifier: APP_IDENTIFIER,
+      skip_waiting_for_build_processing: true
+    )
+  end
+end
