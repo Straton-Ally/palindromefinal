@@ -86,6 +86,23 @@ export default function ProfileScreenWeb() {
 
   const [avatar, setAvatar] = React.useState<string | null>(null);
   const [uploading, setUploading] = React.useState(false);
+  const [deletingAccount, setDeletingAccount] = React.useState(false);
+
+  const confirmDeleteAccount = async () => {
+    const confirmed = window.confirm(
+      'Delete your account?\n\nThis permanently deletes your account, profile, scores, friends and match history. This cannot be undone.'
+    );
+    if (!confirmed) return;
+    setDeletingAccount(true);
+    const result = await authService.deleteAccount();
+    setDeletingAccount(false);
+    if (!result.success) {
+      alert(`Could not delete account: ${result.error || 'Please try again.'}`);
+      return;
+    }
+    alert('Your account and all your data have been permanently deleted.');
+    router.replace('/');
+  };
   const [loading, setLoading] = React.useState(false);
 
   const [fullName, setFullName] = React.useState('');
@@ -580,6 +597,17 @@ export default function ProfileScreenWeb() {
             <Ionicons name="log-out-outline" size={18} color="#FFF" style={styles.logoutIcon} />
             <Text style={styles.logoutButtonText}>Logout</Text>
           </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.deleteAccountButton}
+            onPress={confirmDeleteAccount}
+            disabled={deletingAccount}
+            accessibilityRole="button"
+            accessibilityLabel="Delete account"
+          >
+            <Ionicons name="trash-outline" size={18} color="#FF3B30" style={styles.logoutIcon} />
+            <Text style={styles.deleteAccountText}>{deletingAccount ? 'Deleting…' : 'Delete Account'}</Text>
+          </TouchableOpacity>
         </View>
       </LinearGradient>
     </ScrollView>
@@ -959,6 +987,25 @@ const styles = StyleSheet.create({
   },
   logoutButtonText: {
     color: '#fff',
+    fontSize: 15,
+    fontWeight: '700',
+    fontFamily: 'Geist-Bold',
+  },
+  deleteAccountButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'center',
+    marginTop: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: '#FF3B30',
+    gap: 8,
+  },
+  deleteAccountText: {
+    color: '#FF3B30',
     fontSize: 15,
     fontWeight: '700',
     fontFamily: 'Geist-Bold',
