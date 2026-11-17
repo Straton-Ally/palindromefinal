@@ -1,0 +1,118 @@
+name: iOS → TestFlight
+
+# Manual trigger only: macOS minutes are expensive and every run uploads a
+# build to App Store Connect. Run it from the Actions tab → "Run workflow".
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 90
+
+    steps:
+      - name: 🏗 Setup repo
+        uses: actions/checkout@v4
+
+      - name: 🔍 Check required secrets
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+        run: |
+          missing=0
+          for name in APPLE_TEAM_ID ASC_KEY_ID ASC_ISSUER_ID ASC_API_KEY_P8 IOS_DIST_CERT_P12_BASE64 IOS_DIST_CERT_PASSWORD; do
+            if [ -z "${!name}" ]; then echo "::error::Missing secret $name"; missing=1; fi
+          done
+          exit $missing
+
+      # Apple requires the iOS 26 SDK (Xcode 26) for App Store uploads.
+      - name: 🛠 Select Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: 🏗 Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: npm
+
+      - name: 📦 Install dependencies
+        run: npm ci
+
+      - name: 🔑 Create .env file
+        env:
+          GOOGLE_IOS_CLIENT_ID: ${{ vars.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID }}
+        run: |
+          echo "EXPO_PUBLIC_SUPABASE_URL=https://agjktsybmlmikxuvodkc.supabase.co" >> .env
+          echo "EXPO_PUBLIC_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFnamt0c3libWxtaWt4dXZvZGtjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjgwNDQ3OTgsImV4cCI6MjA4MzYyMDc5OH0.vVrSSfmpYJyMLnjuQ0oGWbxlgGXNPqPL0l7Mvq5WLeo" >> .env
+          echo "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID=851216822060-02k6v3ohd2il23origmnabm88er4laku.apps.googleusercontent.com" >> .env
+          if [ -n "$GOOGLE_IOS_CLIENT_ID" ]; then
+            echo "EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID=$GOOGLE_IOS_CLIENT_ID" >> .env
+          fi
+
+      # GoogleService-Info.plist is gitignored. Use it if provided as a secret,
+      # otherwise drop the reference so prebuild doesn't fail (no Firebase SDK
+      # is installed, so the app doesn't need it).
+      - name: 🔧 Prepare GoogleService-Info.plist
+        env:
+          GOOGLE_SERVICE_INFO_PLIST_BASE64: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+        run: |
+          if [ -n "$GOOGLE_SERVICE_INFO_PLIST_BASE64" ]; then
+            echo "$GOOGLE_SERVICE_INFO_PLIST_BASE64" | base64 --decode > GoogleService-Info.plist
+          else
+            node -e "const f='app.json';const c=require('./'+f);delete c.expo.ios.googleServicesFile;require('fs').writeFileSync(f,JSON.stringify(c,null,2))"
+            echo "No GoogleService-Info.plist secret; removed ios.googleServicesFile for this build."
+          fi
+
+      - name: ⚙️ Prebuild iOS project
+        run: npx expo prebuild --platform ios --no-install
+
+      - name: 📦 Install CocoaPods
+        run: cd ios && pod install
+
+      - name: 🔐 Decode distribution certificate
+        env:
+          IOS_DIST_CERT_P12_BASE64: ${{ secrets.IOS_DIST_CERT_P12_BASE64 }}
+        run: |
+          echo "$IOS_DIST_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/dist.p12"
+          echo "DIST_CERT_PATH=$RUNNER_TEMP/dist.p12" >> "$GITHUB_ENV"
+
+      - name: 🚀 Build and upload to TestFlight
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+          IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
+          FASTLANE_SKIP_UPDATE_CHECK: "1"
+          FASTLANE_HIDE_TIMESTAMP: "1"
+        run: fastlane ios release
+
+      - name: 📤 Upload IPA
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: palindrome-ios-ipa
+          path: build/Palindrome.ipa
+          retention-days: 7
+
+      - name: 📤 Upload build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-build-logs
+          path: ~/Library/Logs/gym
+          if-no-files-found: ignore
+
+      - name: 🧹 Remove signing files
+        if: always()
+        run: rm -f "$RUNNER_TEMP/dist.p12" GoogleService-Info.plist
