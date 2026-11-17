@@ -11,7 +11,9 @@ concurrency:
 
 jobs:
   ios:
-    runs-on: macos-15
+    # macOS arm64 hosted runners hit capacity limits ("job was not acquired");
+    # the Intel pool is separate and still ships Xcode 26.
+    runs-on: macos-15-intel
     timeout-minutes: 90
 
     steps:
