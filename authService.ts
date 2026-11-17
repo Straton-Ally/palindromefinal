@@ -458,6 +458,42 @@ class AuthService {
     }
   }
 
+  /**
+   * Permanently deletes the signed-in user's account and all their data
+   * (profile, scores, friends, matches participation, notifications, avatars),
+   * then signs out locally.
+   */
+  async deleteAccount(): Promise<AuthResult> {
+    try {
+      const supabase = getSupabaseClient();
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        return { success: false, error: 'You need to be signed in to delete your account.' };
+      }
+
+      // Best-effort: remove uploaded avatars ({userId}/...) via the Storage API.
+      try {
+        const { data: files } = await supabase.storage.from('avatars').list(user.id, { limit: 1000 });
+        if (files?.length) {
+          await supabase.storage.from('avatars').remove(files.map((f) => `${user.id}/${f.name}`));
+        }
+      } catch (storageError) {
+        console.warn('[auth] avatar cleanup failed:', storageError);
+      }
+
+      const { error } = await supabase.rpc('delete_own_account');
+      if (error) return { success: false, error: error.message, code: (error as any).code };
+
+      clearPasswordResetHandoff();
+      await AsyncStorage.removeItem(`profile_cache_${user.id}`).catch(() => {});
+      // The user no longer exists server-side, so only clear the local session.
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+      return { success: true };
+    } catch (e: any) {
+      return { success: false, error: e?.message || 'Failed to delete account' };
+    }
+  }
+
   async resetPassword(email: string): Promise<AuthResult> {
     try {
       const supabase = getSupabaseClient();
