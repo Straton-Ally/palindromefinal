@@ -97,6 +97,10 @@ jobs:
           IOS_DIST_CERT_PASSWORD: ${{ secrets.IOS_DIST_CERT_PASSWORD }}
           FASTLANE_SKIP_UPDATE_CHECK: "1"
           FASTLANE_HIDE_TIMESTAMP: "1"
+          # Intel runners are slow to answer `xcodebuild -showBuildSettings`
+          # (default 3s base timeout x 4 retries is not enough).
+          FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "120"
+          FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "5"
         run: fastlane ios release
 
       - name: 📤 Upload IPA
