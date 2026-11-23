@@ -1,3 +1,4 @@
+import { withoutBlocked } from '@/lib/moderation';
 import { getSupabaseClient } from '@/supabase';
 
 export type SinglePlayerBestRow = {
@@ -48,7 +49,7 @@ export async function getSinglePlayerLeaderboard(limit = 20): Promise<Leaderboar
     .order('best_time_seconds', { ascending: true })
     .limit(limit);
   if (error) throw error;
-  const rows = (data ?? []) as any[];
+  const rows = await withoutBlocked((data ?? []) as any[], (r) => r.user_id as string);
 
   // Fetch profiles separately — single_player_best.user_id FK points to auth.users,
   // so PostgREST cannot resolve the profiles relationship automatically.

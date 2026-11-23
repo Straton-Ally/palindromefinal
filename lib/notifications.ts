@@ -3,6 +3,7 @@
  * Friend requests, challenges, and app updates.
  */
 
+import { getHiddenPlayerIds } from '@/lib/moderation';
 import { getSupabaseClient } from '@/supabase';
 
 export type NotificationType = 'friend_request' | 'challenge' | 'app_update';
@@ -39,7 +40,12 @@ export async function getNotifications(
 
   const { data, error } = await query;
   if (error) throw error;
-  return (data ?? []) as NotificationRow[];
+  // Hide notifications sent by blocked players (their names are in the title).
+  const hidden = await getHiddenPlayerIds();
+  return ((data ?? []) as NotificationRow[]).filter((n) => {
+    const from = n.data?.from_user_id;
+    return !(typeof from === 'string' && hidden.has(from));
+  });
 }
 
 /**
