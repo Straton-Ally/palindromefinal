@@ -1,3 +1,4 @@
+import { PlayerActionsButton } from '@/components/PlayerActions';
 import { useThemeContext } from '@/context/ThemeContext';
 import { useAuth } from '@/hooks/useAuth';
 import { getMyBestSinglePlayer, getSinglePlayerLeaderboard } from '@/lib/singlePlayer';
@@ -200,6 +201,13 @@ export default function LeaderboardScreen() {
                       <Text style={[styles.listScore, { color: text }]}>{r.best_score}</Text>
                       <Text style={[styles.listTime, { color: muted }]}>{formatTime(r.best_time_seconds)}</Text>
                     </View>
+                    {!isMe && user ? (
+                      <PlayerActionsButton
+                        player={{ id: r.user_id, name, avatarUrl: r.profile?.avatar_url ?? null }}
+                        onBlocked={(id) => setLeaderboard((prev) => prev.filter((row) => row.user_id !== id))}
+                        size={18}
+                      />
+                    ) : null}
                   </View>
                 );
               })}

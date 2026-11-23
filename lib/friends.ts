@@ -4,6 +4,7 @@
  */
 
 import { authService } from '@/authService';
+import { withoutBlocked } from '@/lib/moderation';
 import { createNotification } from '@/lib/notifications';
 import { getSupabaseClient } from '@/supabase';
 
@@ -60,6 +61,7 @@ export async function sendFriendRequest(
     .single();
   if (error) {
     if (error.code === '23505') throw new Error('Friend request already sent or already friends');
+    if (error.code === '42501') throw new Error("You can't add this player.");
     throw error;
   }
   const row = data as FriendRow;
@@ -121,7 +123,7 @@ export async function getFriends(userId: string): Promise<FriendRow[]> {
     .eq('status', 'accepted')
     .or(`user_id.eq.${userId},friend_id.eq.${userId}`);
   if (error) throw error;
-  return (data ?? []) as FriendRow[];
+  return withoutBlocked((data ?? []) as FriendRow[], (f) => (f.user_id === userId ? f.friend_id : f.user_id));
 }
 
 /**
@@ -135,7 +137,7 @@ export async function getPendingFriendRequests(userId: string): Promise<FriendRo
     .eq('friend_id', userId)
     .eq('status', 'pending');
   if (error) throw error;
-  return (data ?? []) as FriendRow[];
+  return withoutBlocked((data ?? []) as FriendRow[], (f) => f.user_id);
 }
 
 /**
@@ -244,6 +246,7 @@ export async function challengeFriend(
     .single();
   if (chalErr) {
     await supabase.from('matches').update({ status: 'cancelled' }).eq('id', match.id);
+    if (chalErr.code === '42501') throw new Error("You can't challenge this player.");
     throw chalErr;
   }
 
@@ -361,7 +364,7 @@ export async function getPendingChallenges(userId: string): Promise<ChallengeRow
     .eq('status', 'pending')
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []) as ChallengeRow[];
+  return withoutBlocked((data ?? []) as ChallengeRow[], (c) => c.from_user_id);
 }
 
 /**
@@ -383,7 +386,10 @@ export async function searchUsers(
     .or(`username.ilike.%${q}%,full_name.ilike.%${q}%,email.ilike.%${q}%`)
     .limit(limit);
   if (error) return [];
-  return (data ?? []) as { id: string; full_name: string | null; avatar_url: string | null; username: string | null }[];
+  return withoutBlocked(
+    (data ?? []) as { id: string; full_name: string | null; avatar_url: string | null; username: string | null }[],
+    (u) => u.id
+  );
 }
 
 /**
@@ -407,7 +413,7 @@ export async function getRecentOpponents(
     .in('match_id', matchIds)
     .neq('user_id', userId);
 
-  const opponentIds = [...new Set((opponents ?? []).map((o) => o.user_id))];
+  const opponentIds = await withoutBlocked([...new Set((opponents ?? []).map((o) => o.user_id as string))], (id) => id);
   if (!opponentIds.length) return [];
 
   const { data: profiles } = await supabase

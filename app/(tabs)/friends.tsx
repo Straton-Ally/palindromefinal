@@ -1,4 +1,5 @@
 import { authService } from '@/authService';
+import { PlayerActionsButton } from '@/components/PlayerActions';
 import { useThemeContext } from '@/context/ThemeContext';
 import {
   acceptChallenge,
@@ -277,6 +278,7 @@ export default function FriendsScreen() {
                   challenge={c}
                   onAccept={() => handleAcceptChallenge(c.id)}
                   onDecline={() => handleDeclineChallenge(c.id)}
+                  onBlocked={() => void load()}
                   text={text}
                   muted={muted}
                   accentColor={colors.accent}
@@ -294,6 +296,7 @@ export default function FriendsScreen() {
                   fromUserId={req.user_id}
                   onAccept={() => handleAcceptRequest(req.id)}
                   onDecline={() => handleDeclineRequest(req.id)}
+                  onBlocked={() => void load()}
                   theme={theme}
                   text={text}
                   muted={muted}
@@ -463,6 +466,10 @@ export default function FriendsScreen() {
                   >
                     <Text style={styles.challengeBtnText}>Challenge</Text>
                   </Pressable>
+                  <PlayerActionsButton
+                    player={{ id: f.otherUserId, name: f.displayName, avatarUrl: f.avatarUrl }}
+                    onBlocked={() => void load()}
+                  />
                 </View>
               ))
             )}
@@ -478,6 +485,7 @@ function ChallengeRowFriends({
   challenge,
   onAccept,
   onDecline,
+  onBlocked,
   text,
   muted,
   accentColor,
@@ -485,6 +493,7 @@ function ChallengeRowFriends({
   challenge: ChallengeRow;
   onAccept: () => void;
   onDecline: () => void;
+  onBlocked: () => void;
   text: string;
   muted: string;
   accentColor: string;
@@ -507,6 +516,7 @@ function ChallengeRowFriends({
       >
         <Text style={[styles.smallBtnText, { color: muted }]}>Decline</Text>
       </Pressable>
+      <PlayerActionsButton player={{ id: challenge.from_user_id, name, avatarUrl: null }} onBlocked={onBlocked} />
     </View>
   );
 }
@@ -516,6 +526,7 @@ function FriendRequestRow({
   fromUserId,
   onAccept,
   onDecline,
+  onBlocked,
   theme,
   text,
   muted,
@@ -524,6 +535,7 @@ function FriendRequestRow({
   fromUserId: string;
   onAccept: () => void;
   onDecline: () => void;
+  onBlocked: () => void;
   theme: string;
   text: string;
   muted: string;
@@ -550,6 +562,7 @@ function FriendRequestRow({
       <Pressable onPress={onDecline} style={[styles.smallBtn, { borderWidth: 1, borderColor: muted }]}>
         <Text style={[styles.smallBtnText, { color: muted }]}>Decline</Text>
       </Pressable>
+      <PlayerActionsButton player={{ id: fromUserId, name, avatarUrl: avatar }} onBlocked={onBlocked} />
     </View>
   );
 }

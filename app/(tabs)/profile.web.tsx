@@ -564,6 +564,15 @@ export default function ProfileScreenWeb() {
           <View style={styles.legalLinksContainer}>
             <TouchableOpacity
               style={[styles.legalLink, { borderColor: colors.border }]}
+              onPress={() => router.push('/blockedplayers' as any)}
+            >
+              <Ionicons name="ban-outline" size={18} color={colors.primary} />
+              <Text style={[styles.legalLinkText, { color: colors.text }]}>Blocked Players</Text>
+              <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.legalLink, { borderColor: colors.border }]}
               onPress={() => router.push('/privacy-policy' as any)}
             >
               <Ionicons name="shield-outline" size={18} color={colors.primary} />

@@ -627,6 +627,18 @@ export default function ProfileScreen() {
         >
           <TouchableOpacity
             style={[styles.legalLinkRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)' }]}
+            onPress={() => router.push('/blockedplayers' as any)}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="ban-outline" size={20} color={isDark ? '#FFFFFF' : '#0060FF'} />
+            <Text style={[styles.legalLinkText, { color: isDark ? '#FFFFFF' : '#111111' }]}>
+              Blocked Players
+            </Text>
+            <Ionicons name="chevron-forward" size={18} color={isDark ? 'rgba(255,255,255,0.65)' : '#0060FF'} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.legalLinkRow, { borderBottomColor: isDark ? 'rgba(255,255,255,0.12)' : 'rgba(0,0,0,0.08)' }]}
             onPress={() => router.push('/privacy-policy' as any)}
             activeOpacity={0.85}
           >

@@ -2,6 +2,7 @@
 
 import { authService } from '@/authService';
 import { useThemeContext } from '@/context/ThemeContext';
+import { PlayerActionsButton } from '@/components/PlayerActions';
 import { getFriendStatus, getRecentOpponents, searchUsers, sendFriendRequest } from '@/lib/friends';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
@@ -105,6 +106,11 @@ export default function AddFriendWebScreen() {
     [userId]
   );
 
+  const handleBlocked = useCallback((blockedId: string) => {
+    setSearchResults((prev) => prev.filter((r) => r.id !== blockedId));
+    setRecentOpponents((prev) => prev.filter((r) => r.id !== blockedId));
+  }, []);
+
   const goBack = useCallback(() => router.back(), []);
 
   const cardBg = isDark ? 'rgba(25,25,91,0.6)' : 'rgba(255,255,255,0.9)';
@@ -182,6 +188,10 @@ export default function AddFriendWebScreen() {
                       )}
                     </Pressable>
                   )}
+                  <PlayerActionsButton
+                    player={{ id: u.id, name: displayName(u), avatarUrl: u.avatar_url }}
+                    onBlocked={handleBlocked}
+                  />
                 </View>
               ))}
             </View>
@@ -216,6 +226,10 @@ export default function AddFriendWebScreen() {
                       )}
                     </Pressable>
                   )}
+                  <PlayerActionsButton
+                    player={{ id: u.id, name: displayName(u), avatarUrl: u.avatar_url }}
+                    onBlocked={handleBlocked}
+                  />
                 </View>
               ))
             )}
